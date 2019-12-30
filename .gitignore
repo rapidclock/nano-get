@@ -21,3 +21,12 @@ desktop.ini
 
 # Ignore binairies used for testing
 bin
+
+
+#Added by cargo
+#
+#already existing elements are commented out
+
+#/target
+#**/*.rs.bk
+#Cargo.lock
