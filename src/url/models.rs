@@ -4,12 +4,18 @@ use std::iter::{FromIterator, IntoIterator};
 
 use crate::url::{parse_full_domain, parse_host_and_port, parse_proto};
 
+/// This is used to represent the various parts of a URL.
 #[derive(Debug, Clone)]
 pub struct URL {
+    /// represents the protocol used in the URL (defaults to http).
     pub protocol: String,
+    /// represents the Host part of the URL.
     pub host: String,
+    /// represents the port of the URL (if specified). Default is port 80 for http.
     pub port: String,
+    /// everything after the / (/ is the default value).
     pub path: String,
+
     _absolute: String,
 }
 
@@ -34,15 +40,18 @@ impl URL {
         }
     }
 
+    /// returns the complete url (which was used to create the URL).
     pub fn get_full_url(&self) -> String {
-        self._absolute.clone()
+        self.protocol.clone() + "://" + &self.host + ":" + &self.port + &self.path
     }
 
+    /// returns the host:port of the url.
     pub fn get_host_with_port(&self) -> String {
         self.host.clone() + ":" + &self.port
     }
 }
 
+/// Represents the ability to be made into a URL.
 pub trait ToUrl {
     fn to_url(&self) -> io::Result<URL>;
 }

@@ -1,6 +1,21 @@
-pub mod url;
-pub mod http;
+//! This crate provides a basic implementation of the HTTP GET Method.
+//! This uses only the standard Rust Library and has no 3rd party dependencies.
+//!
+//! An example usage is shown below:
+//! ```rust
+//! use nano_get::get;
+//!
+//! fn main() {
+//!     let response = get("http://dummy.restapiexample.com/api/v1/employees");
+//!     println!("{}", response);
+//! }
+//! ```
 
+mod url;
+mod http;
+
+pub use url::{URL, ToUrl};
+pub use http::{get};
 
 #[cfg(test)]
 mod tests {

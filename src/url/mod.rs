@@ -1,4 +1,4 @@
-mod models;
+pub mod models;
 
 pub use models::URL;
 pub use models::ToUrl;

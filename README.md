@@ -11,10 +11,10 @@ So Async, manual headers, more fine grained control of the request/response, wil
 
 ## Example Usage
 ```rust
-use nano_get::http;
+use nano_get::get;
 
 fn main() {
-    let response = http::get("http://dummy.restapiexample.com/api/v1/employees");
+    let response = get("http://dummy.restapiexample.com/api/v1/employees");
     println!("{}", response);
 }
 ```

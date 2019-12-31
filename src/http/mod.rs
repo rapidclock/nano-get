@@ -1,8 +1,14 @@
+//! This module provides the main HTTP Get method.
 use std::io::{Read, Result, Write};
 use std::net::TcpStream;
 
 use crate::url::{ToUrl, URL};
 
+/// The basic implementation of the HTTP GET method.
+///
+/// This can be called on anything that implements the ToUrl Trait.
+/// This library provides implementation of the ToUrl trait for String, &str and URL itself.
+/// This function returns the response body as a String.
 pub fn get<A: ToUrl>(url: A) -> String {
     let url = url.to_url().unwrap();
     let mut stream = TcpStream::connect(url.get_host_with_port()).unwrap();
