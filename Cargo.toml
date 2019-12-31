@@ -8,6 +8,7 @@ authors = ["Rahul Thomas <rapidclock@users.noreply.github.com>"]
 edition = "2018"
 license = "MIT"
 repository = "https://github.com/rapidclock/nano-get"
+documentation = "https://docs.rs/nano-get"
 keywords = [
 	"http",
 	"http-get",

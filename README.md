@@ -1,4 +1,7 @@
 # nano-get
+[![Crates.io](https://img.shields.io/crates/v/nano-get.svg)](https://crates.io/crates/nano-get)
+[![Docs.rs](https://docs.rs/nano-get/badge.svg)](https://docs.rs/nano-get)
+
 A very tiny &amp; basic implementation of HTTP GET using only the standard library
 
 Please _note_ that this is not the best or most efficient implementation of the HTTP GET. The whole purpose is to have a basic functioning HTTP GET implementation and avoid having to import a gazzilion other packages, when all you want is a regular GET method for something simple.
