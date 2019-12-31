@@ -14,6 +14,7 @@ So Async, manual headers, more fine grained control of the request/response, wil
 
 ## Example Usage
 ```rust
+extern crate nano_get;
 use nano_get::get;
 
 fn main() {
