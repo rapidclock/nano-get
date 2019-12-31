@@ -1,10 +1,20 @@
 [package]
 name = "nano-get"
-description = "A very tiny and basic implementation of HTTP GET using only the standard library."
+description = """
+A very tiny and basic implementation of HTTP GET using only the standard library.
+"""
 version = "0.1.0"
 authors = ["Rahul Thomas <rapidclock@users.noreply.github.com>"]
 edition = "2018"
 license = "MIT"
+repository = "https://github.com/rapidclock/nano-get"
+keywords = [
+	"http",
+	"http-get",
+	"http-client",
+]
+readme = "README.md"
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
