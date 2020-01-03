@@ -28,15 +28,23 @@ impl Display for URL {
 impl URL {
     pub fn new(url: &str) -> Self {
         let url = url.to_string();
-        let (protocol, rest) = parse_proto(url.clone());
-        let (full_domain, path) = parse_full_domain(rest.clone());
-        let (host, port) = parse_host_and_port(full_domain.clone());
+        let (protocol, rest) = parse_proto(url.clone(), None);
+        let (full_domain, path) = parse_full_domain(rest.clone(), None);
+        let (host, port) = parse_host_and_port(full_domain, Self::get_default_port_for_proto(&protocol));
         URL {
             protocol,
             host,
             port,
             path,
             _absolute: url,
+        }
+    }
+
+    fn get_default_port_for_proto(proto: &str) -> Option<String> {
+        match proto {
+            "http" => Some("80".to_string()),
+            "https" => Some("443".to_string()),
+            _ => None
         }
     }
 
@@ -72,6 +80,12 @@ impl ToUrl for &str {
 impl ToUrl for URL {
     fn to_url(&self) -> io::Result<URL> {
         Ok(self.clone())
+    }
+}
+
+impl ToUrl for &'_ URL {
+    fn to_url(&self) -> io::Result<URL> {
+        Ok((*self).clone())
     }
 }
 
