@@ -3,7 +3,7 @@ name = "nano-get"
 description = """
 A very tiny and basic implementation of HTTP GET using only the standard library.
 """
-version = "0.2.0-alpha-1"
+version = "0.2.0-alpha-2"
 authors = ["Rahul Thomas <rapidclock@users.noreply.github.com>"]
 edition = "2018"
 license = "MIT"
