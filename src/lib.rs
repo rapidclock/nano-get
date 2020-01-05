@@ -3,12 +3,8 @@
 //!
 //! An example usage is shown below:
 //! ```rust
-//! use nano_get::get_http;
-//!
-//! fn main() {
-//!     let response = get_http("http://dummy.restapiexample.com/api/v1/employees");
-//!     println!("{}", response);
-//! }
+//! let response = nano_get::get_http("http://dummy.restapiexample.com/api/v1/employees");
+//! println!("{}", response);
 //! ```
 //!
 //! A HTTPS version is provided since v0.2.0 that depends on OpenSSL & the Rust OpenSSL wrapper lib.
@@ -26,27 +22,22 @@
 //!
 //! An example usage of the unified get is shown below:
 //! ```rust
-//! use nano_get::get;
-//!
-//! fn main() {
-//!     let response = get("http://dummy.restapiexample.com/api/v1/employees");
-//!     println!("{}", response);
-//! }
+//! let response = nano_get::get_http("http://dummy.restapiexample.com/api/v1/employees");
+//! println!("{}", response);
 //! ```
 //!
 //! or, with the "https" feature flag enabled and the OpenSSL library present,
 //!
 //! ```rust
-//! use nano_get::get;
-//!
-//! fn main() {
-//!     let response = get("https://www.google.com");
-//!     println!("{}", response);
-//! }
+//! let response = nano_get::get("https://www.google.com");
+//! println!("{}", response);
 //! ```
 
 mod url;
 mod http;
+mod request;
+mod response;
+mod errors;
 
 #[cfg(feature = "https")]
 mod https;
@@ -54,8 +45,11 @@ mod https;
 #[cfg(feature = "https")]
 pub use https::get_https;
 
-pub use url::{URL, ToUrl};
-pub use http::get_http;
+pub use url::{Url, ToUrl};
+pub use http::{get_http, execute};
+
+pub use request::{Request, Header};
+pub use response::{Response, ResponseStatus, StatusCode};
 
 /// This is a unified function for the HTTP GET method.
 ///
@@ -69,6 +63,7 @@ pub use http::get_http;
 /// If you require manual control of the method that is called, you should use the specific method.
 ///
 /// This can be called on anything that implements the ToUrl Trait.
+#[allow(unused_variables)]
 pub fn get<U: ToUrl>(url: U) -> String {
     let url = url.to_url().unwrap();
     let protocol = &url.protocol[..];

@@ -1,13 +1,13 @@
 pub mod models;
 
-pub use models::URL;
+pub use models::Url;
 pub use models::ToUrl;
 use models::Tuple;
 
 pub fn parse_proto(s: String, default_proto: Option<String>) -> (String, String) {
     let parts: Vec<&str> = s.split("://").collect();
     if parts.len() > 1 {
-        (parts.first().unwrap().to_string(), parts[1].to_string())
+        ((*parts.first().unwrap()).to_string(), parts[1].to_string())
     } else {
         match default_proto {
             Some(proto) => (proto, parts[0].to_string()),
@@ -17,7 +17,7 @@ pub fn parse_proto(s: String, default_proto: Option<String>) -> (String, String)
 }
 
 pub fn parse_full_domain(s: String, default_path: Option<String>) -> (String, String) {
-    if let Some(i) = s.find("/") {
+    if let Some(i) = s.find('/') {
         let fdom = &s[0..i];
         let rest = &s[i..];
         (fdom.to_string(), rest.to_string())
@@ -30,8 +30,8 @@ pub fn parse_full_domain(s: String, default_path: Option<String>) -> (String, St
 }
 
 pub fn parse_host_and_port(s: String, default_port: Option<String>) -> (String, String) {
-    if let Some(_) = s.find(":") {
-        let tuple: Tuple<&str> = s.splitn(2, ":").collect();
+    if s.find(':').is_some() {
+        let tuple: Tuple<&str> = s.splitn(2, ':').collect();
         (tuple.left.to_string(), tuple.right.to_string())
     } else {
         match default_port {

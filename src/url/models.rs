@@ -6,7 +6,7 @@ use crate::url::{parse_full_domain, parse_host_and_port, parse_proto};
 
 /// This is used to represent the various parts of a URL.
 #[derive(Debug, Clone)]
-pub struct URL {
+pub struct Url {
     /// represents the protocol used in the URL (defaults to http).
     pub protocol: String,
     /// represents the Host part of the URL.
@@ -19,19 +19,19 @@ pub struct URL {
     _absolute: String,
 }
 
-impl Display for URL {
+impl Display for Url {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), Error> {
         write!(f, "url: {},\nproto: {},\nhost: {},\nport: {},\npath: {}\n", self._absolute, self.protocol, self.host, self.port, self.path)
     }
 }
 
-impl URL {
+impl Url {
     pub fn new(url: &str) -> Self {
         let url = url.to_string();
         let (protocol, rest) = parse_proto(url.clone(), None);
-        let (full_domain, path) = parse_full_domain(rest.clone(), None);
+        let (full_domain, path) = parse_full_domain(rest, None);
         let (host, port) = parse_host_and_port(full_domain, Self::get_default_port_for_proto(&protocol));
-        URL {
+        Url {
             protocol,
             host,
             port,
@@ -61,30 +61,30 @@ impl URL {
 
 /// Represents the ability to be made into a URL.
 pub trait ToUrl {
-    fn to_url(&self) -> io::Result<URL>;
+    fn to_url(&self) -> io::Result<Url>;
 }
 
 
 impl ToUrl for String {
-    fn to_url(&self) -> io::Result<URL> {
-        Ok(URL::new(self))
+    fn to_url(&self) -> io::Result<Url> {
+        Ok(Url::new(self))
     }
 }
 
 impl ToUrl for &str {
-    fn to_url(&self) -> io::Result<URL> {
-        Ok(URL::new(self))
+    fn to_url(&self) -> io::Result<Url> {
+        Ok(Url::new(self))
     }
 }
 
-impl ToUrl for URL {
-    fn to_url(&self) -> io::Result<URL> {
+impl ToUrl for Url {
+    fn to_url(&self) -> io::Result<Url> {
         Ok(self.clone())
     }
 }
 
-impl ToUrl for &'_ URL {
-    fn to_url(&self) -> io::Result<URL> {
+impl ToUrl for &'_ Url {
+    fn to_url(&self) -> io::Result<Url> {
         Ok((*self).clone())
     }
 }
@@ -101,8 +101,8 @@ impl<T> FromIterator<T> for Tuple<T>
         let mut iterator = iter.into_iter();
         if let Some(left) = iterator.next() {
             if let Some(right) = iterator.next() {
-                let left = left.clone();
-                let right = right.clone();
+                let left = left;
+                let right = right;
                 return Tuple { left, right };
             }
         }
