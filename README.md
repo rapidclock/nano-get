@@ -71,6 +71,43 @@ The basic models in this crate are:
 * Request
 * Response
 
+## Executing HTTP(s) Requests:
+
+There are two ways to execute the HTTP(s) requests.
+
+### Basic Get
+The basic version, demonstrated by the use of the `nano_get::get` function, which takes a url
+and returns the body of the response.
+
+#### Example
+```rust
+extern crate nano_get;
+use nano_get::get;
+
+fn main() {
+    let response = nano_get::get("https://www.google.com");
+    println!("{}", response);
+}
+```
+
+### Request-Response based
+Another more fine-grained method exists by using the `nano_get::Request` object.
+This gives you access to request headers, optional request body and the execution returns a
+`nano_get::Response` object. This allows inspection of HTTP Response codes, response body, etc.
+
+#### Example
+```rust
+extern crate nano_get;
+use nano_get::{Request, Response};
+
+fn main() {
+    let mut request = Request::default_get_request("http://example.com/").unwrap();
+    let response: Response = request.execute().unwrap();
+    println!("{}", response.body);
+}
+```
+For details, check the `Request` and `Response` structure documentation.
+
 ## Async:
 As of writing this, this crate does not using async/await features of Rust.
 However, this does not stop the user from using this library in their application in a async context.
