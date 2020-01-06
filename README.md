@@ -2,7 +2,7 @@
 [![Crates.io](https://img.shields.io/crates/v/nano-get.svg)](https://crates.io/crates/nano-get)
 [![Docs.rs](https://docs.rs/nano-get/badge.svg)](https://docs.rs/nano-get)
 
-A very tiny implementation of HTTP GET using only the standard library by default.
+A tiny implementation of HTTP GET using only the standard library by default.
 
 If you require `https`, please enable the `"https"` feature flag like:
 ```
