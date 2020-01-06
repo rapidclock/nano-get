@@ -1,29 +1,73 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Error};
+use crate::url::models::Tuple;
 
 
 /// This is the HTTP Reponse Object.
 ///
 /// Represents the Response from executing a HTTP `Request`.
 ///
+/// This allows inspection of the HTTP Status Code & Reason and HTTP Response Body.
+///
+/// ## Example
+/// ```rust
+/// use nano_get::Response;
+/// let mut request = nano_get::Request::default_get_request("http://example.com/").unwrap();
+/// request.add_header("test", "value testing");
+/// let response: Response = request.execute().unwrap();
+/// println!("Status: {}", response.status);
+/// println!("Body: {}", response.body);
+/// ```
 pub struct Response {
     /// The status of the Response.
     pub status: ResponseStatus,
     /// The body of the Response.
     pub body: String,
-    _headers: Option<HashMap<String, String>>,
+    headers: Option<HashMap<String, String>>,
+}
+
+impl Response {
+    /// Get an iterator of the Headers in the Response.
+    ///
+    /// ## Example
+    ///
+    /// ```rust
+    /// use nano_get::Response;
+    ///
+    /// let mut request = nano_get::Request::default_get_request("http://example.com/").unwrap();
+    /// request.add_header("test", "value testing");
+    /// let response = request.execute().unwrap();
+    /// for (k, v) in response.get_response_headers().unwrap() {
+    ///     println!("{}, {}", k, v);
+    /// }
+    /// ```
+    pub fn get_response_headers(&self) -> Option<impl Iterator<Item=(&str, &str)>> {
+        if self.headers.is_none() {
+            return None;
+        }
+        Some(self.headers.as_ref().unwrap().iter().map(|(k, v)| {
+            (k.as_str(), v.as_str())
+        }))
+    }
+
+    /// Returns the status code of the Response as an unsigned 16-bit Integer (u16).
+    ///
+    /// Provided as a convenience. This can be got through the embedded `ResponseStatus` also.
+    pub fn get_status_code(&self) -> Option<u16> {
+        self.status.0.get_code()
+    }
 }
 
 pub fn new_response_from_complete(response: String) -> Response {
     let lines: Vec<&str> = response.splitn(2, "\r\n\r\n").collect();
     let heads = (*lines.first().unwrap()).to_string();
     let head_lines: Vec<&str> = heads.split("\r\n").collect();
-    let (resp_state, _) = process_head_lines(head_lines);
+    let (resp_state, headers) = process_head_lines(head_lines);
     let body = (*lines.last().unwrap()).to_string();
     Response {
         status: resp_state,
         body,
-        _headers: None,
+        headers,
     }
 }
 
@@ -32,7 +76,25 @@ fn process_head_lines(lines: Vec<&str>) -> (ResponseStatus, Option<HashMap<Strin
     let parts: Vec<&str> = head.split(' ').collect();
     let status_code = StatusCode::from_code(parts.get(1).unwrap());
     let reason = parts.get(2).map(|v| (*v).to_string());
-    (ResponseStatus(status_code, reason), None)
+    let response_headers = process_response_headers(&lines[1..]);
+    (ResponseStatus(status_code, reason), response_headers)
+}
+
+fn process_response_headers(lines: &[&str]) -> Option<HashMap<String, String>> {
+    return if lines.is_empty() {
+        None
+    } else {
+        let mut headers = HashMap::new();
+        for &line in lines {
+            if line.contains(':') {
+                let line_comp: Tuple<&str> = line.splitn(2, ':').collect();
+                headers.insert((*line_comp.left).to_string(), (*line_comp.right).trim().to_string());
+            } else {
+                continue;
+            }
+        }
+        Some(headers)
+    }
 }
 
 #[derive(Debug, Clone)]

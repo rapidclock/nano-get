@@ -6,7 +6,7 @@ use crate::errors::NanoGetError;
 use crate::https::request_https_get;
 use crate::http::request_http_get;
 
-/// This is the basic Request Object.
+/// This is the basic HTTP Request Object.
 ///
 /// This is self-containing and you can execute the request using its execute method.
 /// It invokes a http or https version depending on the protocol of the embedded url and
@@ -203,11 +203,11 @@ impl Request {
     ///
     /// let mut request = nano_get::Request::default_get_request("http://example.com/").unwrap();
     /// request.add_header("test", "value testing");
-    /// for (k, v) in request.get_headers() {
+    /// for (k, v) in request.get_request_headers() {
     ///     println!("{}, {}", k, v);
     /// }
     /// ```
-    pub fn get_headers(&self) -> impl Iterator<Item=(&str, &str)> {
+    pub fn get_request_headers(&self) -> impl Iterator<Item=(&str, &str)> {
         self.headers.as_ref().unwrap().iter().map(|(k, v)| {
             (k.as_str(), v.as_str())
         })

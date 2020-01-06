@@ -46,7 +46,7 @@ fn write_http_method(stream: &mut dyn Write, request: &Request) -> std::io::Resu
 }
 
 fn write_std_headers(stream: &mut dyn Write, request: &Request) -> std::io::Result<()> {
-    for (k, v) in request.get_headers() {
+    for (k, v) in request.get_request_headers() {
         writeln!(stream, "{}: {}\r", k, v)?;
     }
     stream.write_all(b"\r\n")?;
