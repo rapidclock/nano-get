@@ -4,7 +4,7 @@ use std::net::TcpStream;
 
 use crate::url::{ToUrl};
 use crate::request::Request;
-use crate::response::Response;
+use crate::response::{Response, new_response_from_complete};
 use crate::errors::{NanoGetError};
 
 /// The basic implementation of the HTTP GET method.
@@ -71,5 +71,5 @@ fn read_response(stream: &mut dyn Read) -> std::io::Result<Vec<u8>> {
 }
 
 fn parse_body_from_response(response: &str) -> Response {
-    Response::new_from_net_response(response.to_string())
+    new_response_from_complete(response.to_string())
 }

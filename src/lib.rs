@@ -39,7 +39,7 @@
 //! println!("{}", response);
 //! ```
 
-pub use http::{execute, get_http};
+pub use http::get_http;
 #[cfg(feature = "https")]
 pub use https::get_https;
 pub use request::{Header, Request};
