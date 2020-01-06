@@ -69,7 +69,6 @@
 //! ```
 //!
 //! For details, check the `Request` and `Response` structure documentation.
-
 pub use http::get_http;
 #[cfg(feature = "https")]
 pub use https::get_https;

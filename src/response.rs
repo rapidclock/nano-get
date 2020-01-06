@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter, Error};
-use super::url::Tuple;
+use std::fmt::{Display, Error, Formatter};
 
+use super::url::Tuple;
 
 /// This is the HTTP Reponse Object.
 ///
@@ -81,7 +81,7 @@ fn process_head_lines(lines: Vec<&str>) -> (ResponseStatus, Option<HashMap<Strin
 }
 
 fn process_response_headers(lines: &[&str]) -> Option<HashMap<String, String>> {
-    return if lines.is_empty() {
+    if lines.is_empty() {
         None
     } else {
         let mut headers = HashMap::new();

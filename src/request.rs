@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::error::Error;
 
+use super::{ToUrl, Url};
 use super::errors::NanoGetError;
 use super::http::request_http_get;
+#[cfg(feature = "https")]
 use super::https::request_https_get;
 use super::Response;
-
-use super::{ToUrl, Url};
 
 /// This is the basic HTTP Request Object.
 ///

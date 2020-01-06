@@ -22,17 +22,8 @@ impl std::fmt::Display for NanoGetError {
     }
 }
 
-//impl From for NanoGetError {
-//    fn from(err: std::io::Error) -> Self {
-//
-//    }
-//}
-
 impl NanoGetError {
     pub fn new(kind: ErrorKind) -> Self {
-        NanoGetError {kind}
+        NanoGetError { kind }
     }
 }
-
-
-//pub type Result<T> = std::result::Result<T, NanoGetError>;

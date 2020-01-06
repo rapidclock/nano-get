@@ -3,13 +3,11 @@ extern crate openssl;
 
 use std::net::TcpStream;
 
-use openssl::ssl::{SslConnector, SslMethod};
+use openssl::ssl::{SslConnector, SslMethod, SslStream};
 
 use super::{Request, Response, ToUrl, Url};
-use super::http;
-
-use openssl::ssl::SslStream;
 use super::errors::NanoGetError;
+use super::http;
 
 /// The implementation of HTTPS GET using OpenSSL.
 ///
