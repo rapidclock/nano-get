@@ -6,7 +6,7 @@
 //!
 //! An example usage is shown below:
 //! ```rust
-//! let response = nano_get::get_http("http://dummy.restapiexample.com/api/v1/employees");
+//! let response = nano_get::get_http("http://example.com");
 //! println!("{}", response);
 //! ```
 //!
