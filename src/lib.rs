@@ -1,17 +1,23 @@
 //! This crate provides a basic implementation of the HTTP GET Method.
 //! This uses only the standard Rust Library and has no 3rd party dependencies by default.
 //!
+//! ## Quick Example
+//!
 //! An example usage is shown below:
 //! ```rust
 //! let response = nano_get::get_http("http://dummy.restapiexample.com/api/v1/employees");
 //! println!("{}", response);
 //! ```
 //!
+//! ## HTTPS
+//!
 //! A HTTPS version is provided since v0.2.0 that depends on OpenSSL & the Rust OpenSSL wrapper lib.
 //! This can be enabled by the "https" feature flag (which is NOT activated by default).
 //!
 //! This provides you with the `nano_get::get_https` method which has the same signature as
 //! the standard `nano_get::get_http` method.
+//!
+//! ## Unified HTTP GET
 //!
 //! From version 0.2.0, we profide the new unified `nano_get::get` method which activates the
 //! specific version of http/https get, based on the protocol of the URL.
