@@ -2,10 +2,10 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 
-use crate::url::{ToUrl};
-use crate::request::Request;
-use crate::response::{Response, new_response_from_complete};
-use crate::errors::{NanoGetError};
+use super::errors::NanoGetError;
+use super::Request;
+use super::response::{new_response_from_complete, Response};
+use super::ToUrl;
 
 /// The basic implementation of the HTTP GET method.
 ///

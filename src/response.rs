@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Error};
-use crate::url::models::Tuple;
+use super::url::Tuple;
 
 
 /// This is the HTTP Reponse Object.

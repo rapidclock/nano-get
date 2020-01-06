@@ -5,11 +5,11 @@ use std::net::TcpStream;
 
 use openssl::ssl::{SslConnector, SslMethod};
 
-use crate::{Request, Response, ToUrl, Url};
-use crate::http;
+use super::{Request, Response, ToUrl, Url};
+use super::http;
 
-use self::openssl::ssl::SslStream;
-use crate::errors::NanoGetError;
+use openssl::ssl::SslStream;
+use super::errors::NanoGetError;
 
 /// The implementation of HTTPS GET using OpenSSL.
 ///

@@ -20,7 +20,7 @@
 //!
 //! ## Unified HTTP GET
 //!
-//! From version 0.2.0, we profide the new unified `nano_get::get` method which activates the
+//! From version 0.2.x, we profide the new unified `nano_get::get` method which activates the
 //! specific version of http/https GET, based on the protocol of the URL.
 //!
 //! However, please note that the https part still depends on the "https" feature flag

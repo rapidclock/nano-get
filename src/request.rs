@@ -1,10 +1,12 @@
 use std::collections::HashMap;
-use crate::{ToUrl, Url};
 use std::error::Error;
-use crate::response::Response;
-use crate::errors::NanoGetError;
-use crate::https::request_https_get;
-use crate::http::request_http_get;
+
+use super::errors::NanoGetError;
+use super::http::request_http_get;
+use super::https::request_https_get;
+use super::Response;
+
+use super::{ToUrl, Url};
 
 /// This is the basic HTTP Request Object.
 ///

@@ -1,8 +1,6 @@
 pub mod models;
 
-pub use models::Url;
-pub use models::ToUrl;
-use models::Tuple;
+pub use self::models::{Url, ToUrl, Tuple};
 
 pub fn parse_proto(s: String, default_proto: Option<String>) -> (String, String) {
     let parts: Vec<&str> = s.split("://").collect();

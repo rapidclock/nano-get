@@ -2,7 +2,7 @@ use std::fmt::{Display, Error, Formatter};
 use std::io;
 use std::iter::{FromIterator, IntoIterator};
 
-use crate::url::{parse_full_domain, parse_host_and_port, parse_proto};
+use super::{parse_full_domain, parse_host_and_port, parse_proto};
 
 /// This is used to represent the various parts of a URL.
 #[derive(Debug, Clone)]

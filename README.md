@@ -6,7 +6,7 @@ A tiny implementation of HTTP GET using only the standard library by default.
 
 If you require `https`, please enable the `"https"` feature flag like:
 ```
-nano-get = { version = "0.2.1", features = ["https"] }
+nano-get = { version = "0.2.2", features = ["https"] }
 ```
 
 Enabling the `https` flag, uses the rust [openssl](https://crates.io/crates/openssl) crate.
@@ -120,7 +120,7 @@ This is also not meant to be demonstrative of idiomatic uses of the async librar
 **Cargo.toml snippet**
 ```toml
 [dependencies]
-nano-get = {version = "0.2.1", features = ["https"] }
+nano-get = {version = "0.2.2", features = ["https"] }
 tokio = { version = "0.2.6", features = ["rt-threaded"] }
 futures = "0.3.1"
 ```
