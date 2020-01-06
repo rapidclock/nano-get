@@ -16,13 +16,15 @@ use crate::errors::{NanoGetError};
 /// This function returns the response body as a String.
 pub fn get_http<A: ToUrl>(url: A) -> String {
     let request = Request::default_get_request(url).expect("Url couldn't be formed!");
-    let mut stream = TcpStream::connect(request.url.get_host_with_port()).unwrap();
-    send_request(&mut stream, &request).unwrap();
-    receive_response(&mut stream).unwrap().body
+    request_http_get(&request).unwrap().body
 }
 
-pub fn execute(request: &Request) -> Result<Response, NanoGetError> {
+pub fn request_http_get(request: &Request) -> Result<Response, NanoGetError> {
     let mut stream = TcpStream::connect(request.url.get_host_with_port()).unwrap();
+    execute(&mut stream, &request)
+}
+
+pub fn execute<S: Read + Write>(mut stream: S, request: &Request) -> Result<Response, NanoGetError> {
     send_request(&mut stream, &request).unwrap();
     receive_response(&mut stream)
 }

@@ -33,6 +33,13 @@
 //! println!("{}", response);
 //! ```
 
+pub use http::{execute, get_http};
+#[cfg(feature = "https")]
+pub use https::get_https;
+pub use request::{Header, Request};
+pub use response::{Response, ResponseStatus, StatusCode};
+pub use url::{ToUrl, Url};
+
 mod url;
 mod http;
 mod request;
@@ -41,15 +48,6 @@ mod errors;
 
 #[cfg(feature = "https")]
 mod https;
-
-#[cfg(feature = "https")]
-pub use https::get_https;
-
-pub use url::{Url, ToUrl};
-pub use http::{get_http, execute};
-
-pub use request::{Request, Header};
-pub use response::{Response, ResponseStatus, StatusCode};
 
 /// This is a unified function for the HTTP GET method.
 ///
@@ -79,8 +77,9 @@ pub fn get<U: ToUrl>(url: U) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use url;
+
+    use super::*;
 
     #[test]
     fn test_proto_parse_http() {

@@ -1,8 +1,10 @@
 use std::collections::HashMap;
-use crate::{ToUrl, Url, execute};
+use crate::{ToUrl, Url};
 use std::error::Error;
 use crate::response::Response;
-use crate::errors::{NanoGetError};
+use crate::errors::NanoGetError;
+use crate::https::request_https_get;
+use crate::http::request_http_get;
 
 pub struct Request {
     pub url: Url,
@@ -11,6 +13,7 @@ pub struct Request {
     pub body: Option<String>,
 }
 
+#[allow(dead_code)]
 enum RequestType {
     HEAD,
     GET,
@@ -21,7 +24,7 @@ enum RequestType {
 }
 
 impl RequestType {
-    fn value(&self) -> &'static str{
+    fn value(&self) -> &'static str {
         match self {
             RequestType::GET => "GET",
             RequestType::HEAD => "HEAD",
@@ -42,7 +45,7 @@ impl Request {
             url,
             request_type: RequestType::GET,
             headers: Some(Self::get_default_headers()),
-            body: None
+            body: None,
         };
         let addnl_headers = process_headers(headers);
         request.merge_addnl_headers(addnl_headers);
@@ -62,13 +65,13 @@ impl Request {
         }
     }
 
-    pub fn default_get_request<A: ToUrl> (url: A) -> Result<Self, Box<dyn Error>> {
+    pub fn default_get_request<A: ToUrl>(url: A) -> Result<Self, Box<dyn Error>> {
         let url = url.to_url()?;
         let mut headers = Self::get_default_headers();
         headers.insert("host".to_string(), url.host.clone());
         Ok(Request {
             url,
-            request_type : RequestType::GET,
+            request_type: RequestType::GET,
             headers: Some(headers),
             body: None,
         })
@@ -83,13 +86,22 @@ impl Request {
     }
 
     pub fn execute(&self) -> Result<Response, NanoGetError> {
-        execute(&self)
+        #[cfg(feature = "https")] {
+            if self.is_https() {
+                return request_https_get(&self);
+            }
+        }
+        request_http_get(&self)
     }
 
     pub fn get_headers(&self) -> impl Iterator<Item=(&str, &str)> {
         self.headers.as_ref().unwrap().iter().map(|(k, v)| {
             (k.as_str(), v.as_str())
         })
+    }
+
+    pub fn is_https(&self) -> bool {
+        self.url.protocol.as_str() == "https"
     }
 
     pub fn get_request_type(&self) -> &str {
