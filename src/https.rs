@@ -29,3 +29,8 @@ pub fn request_https_get(request: &Request) -> Result<Response, NanoGetError> {
     let mut ssl_stream = acquire_ssl_stream(&request.url);
     http::execute(&mut ssl_stream, &request)
 }
+
+#[cfg(feature = "async")]
+pub async fn async_request_https(request: &Request) -> Result<Response, NanoGetError> {
+    todo!()
+}

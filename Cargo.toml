@@ -3,7 +3,7 @@ name = "nano-get"
 description = """
 A very tiny implementation of HTTP(s) GET, using minimal dependencies.
 """
-version = "0.2.3"
+version = "0.3.0-alpha1"
 authors = ["Rahul Thomas <rapidclock@users.noreply.github.com>"]
 edition = "2018"
 license = "MIT"
@@ -24,8 +24,12 @@ readme = "README.md"
 
 [dependencies]
 openssl = { version = "0.10.26", optional = true }
+tokio = { version = "0.2.11", optional = true, features = ["tcp"] }
+tokio-tls = {version = "0.3.0", optional = true }
 
 [features]
 http = []
 https = ["openssl"]
+async = ["tokio", "tokio-tls"]
+all = ["http", "https", "async"]
 default = ["http"]

@@ -7,6 +7,8 @@ use super::http::request_http_get;
 #[cfg(feature = "https")]
 use super::https::request_https_get;
 use super::Response;
+#[cfg(feature = "async")]
+use super::asyn;
 
 /// This is the basic HTTP Request Object.
 ///
@@ -194,6 +196,11 @@ impl Request {
             }
         }
         request_http_get(&self)
+    }
+
+    #[cfg(feature = "async")]
+    pub async fn async_exec(&self) -> Result<Response, NanoGetError> {
+        todo!()
     }
 
     /// Returns the headers as an Iterator over the key-value pairs.

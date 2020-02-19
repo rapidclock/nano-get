@@ -85,6 +85,9 @@ mod errors;
 #[cfg(feature = "https")]
 mod https;
 
+#[cfg(feature = "async")]
+pub mod asyn;
+
 /// This is a unified function for the HTTP GET method.
 ///
 /// This calls the http version of GET provided in this crate by default.
@@ -109,6 +112,14 @@ pub fn get<U: ToUrl>(url: U) -> String {
     }
 
     get_http(&url)
+}
+
+#[cfg(feature="async")]
+pub async fn get_async<U: ToUrl>(url: U) -> String {
+    let url = url.to_url().unwrap();
+    let request = Request::default_get_request(url).unwrap();
+    let response : Response = request.async_exec().unwrap();
+    response.body
 }
 
 #[cfg(test)]
