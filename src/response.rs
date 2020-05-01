@@ -42,9 +42,7 @@ impl Response {
     /// }
     /// ```
     pub fn get_response_headers(&self) -> Option<impl Iterator<Item=(&str, &str)>> {
-        if self.headers.is_none() {
-            return None;
-        }
+        self.headers.as_ref()?;
         Some(self.headers.as_ref().unwrap().iter().map(|(k, v)| {
             (k.as_str(), v.as_str())
         }))

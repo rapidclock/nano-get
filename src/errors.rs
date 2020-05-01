@@ -11,6 +11,7 @@ pub enum ErrorKind {
     ParseError,
     NetworkError,
     HttpMethodError,
+    HttpsSslError,
 }
 
 impl std::error::Error for NanoGetError {}
