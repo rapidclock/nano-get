@@ -1,7 +1,7 @@
 # nano-get
 [![Crates.io](https://img.shields.io/crates/v/nano-get.svg)](https://crates.io/crates/nano-get)
 [![Docs.rs](https://docs.rs/nano-get/badge.svg)](https://docs.rs/nano-get)
-![Rust](https://github.com/rapidclock/nano-get/workflows/Rust/badge.svg?branch=master)
+![Rust](https://github.com/rapidclock/nano-get/workflows/Rust/badge.svg?branch=master&event=push)
 
 A minimalistic implementation of HTTP GET using only the standard library by default.
 
