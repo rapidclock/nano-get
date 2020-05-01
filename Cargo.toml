@@ -3,7 +3,7 @@ name = "nano-get"
 description = """
 A very tiny implementation of HTTP(s) GET, using minimal dependencies.
 """
-version = "0.2.3"
+version = "0.2.4"
 authors = ["Rahul Thomas <rapidclock@users.noreply.github.com>"]
 edition = "2018"
 license = "MIT"
@@ -23,7 +23,7 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-openssl = { version = "0.10.26", optional = true }
+openssl = { version = "0.10.29", optional = true }
 
 [features]
 http = []

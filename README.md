@@ -1,12 +1,13 @@
 # nano-get
 [![Crates.io](https://img.shields.io/crates/v/nano-get.svg)](https://crates.io/crates/nano-get)
 [![Docs.rs](https://docs.rs/nano-get/badge.svg)](https://docs.rs/nano-get)
+![Rust](https://github.com/rapidclock/nano-get/workflows/Rust/badge.svg?branch=master)
 
 A minimalistic implementation of HTTP GET using only the standard library by default.
 
 If you require `https`, please enable the `"https"` feature flag like:
 ```
-nano-get = { version = "0.2.3", features = ["https"] }
+nano-get = { version = "0.2.4", features = ["https"] }
 ```
 
 Enabling the `https` flag, uses the rust [openssl](https://crates.io/crates/openssl) crate.
@@ -120,7 +121,7 @@ This is also not meant to be demonstrative of idiomatic uses of the async librar
 **Cargo.toml snippet**
 ```toml
 [dependencies]
-nano-get = {version = "0.2.3", features = ["https"] }
+nano-get = {version = "0.2.4", features = ["https"] }
 tokio = { version = "0.2.10", features = ["blocking", "rt-threaded"] }
 futures = "0.3.1"
 ```
