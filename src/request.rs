@@ -184,8 +184,8 @@ impl Request {
     /// let mut request = nano_get::Request::default_get_request("http://example.com/").unwrap();
     /// request.add_header("test", "value testing");
     /// let response: Response = request.execute().unwrap();
-    /// println!(response.status);
-    /// println!(response.body);
+    /// println!("{}", response.status);
+    /// println!("{}", response.body);
     /// ```
     pub fn execute(&self) -> Result<Response, NanoGetError> {
         #[cfg(feature = "https")] {
