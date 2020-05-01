@@ -28,31 +28,31 @@ jobs:
         components: rustfmt, clippy, rustdoc
     
     - name: Build
-    - uses: actions-rs/cargo@v1
+      uses: actions-rs/cargo@v1
       with:
         command: build
         args: --release --all-features
     
     - name: Tests
-    - uses: actions-rs/cargo@v1
+      uses: actions-rs/cargo@v1
       with:
         command: test
         args: --all-features
 
     - name: Format
-    - uses: actions-rs/cargo@v1
+      uses: actions-rs/cargo@v1
       with:
         command: fmt
         args: --all -- --check
 
     - name: Clippy
-    - uses: actions-rs/cargo@v1
+      uses: actions-rs/cargo@v1
       with:
         command: clippy
         args: --all-features -- -D warnings
     
     - name: Docs
-    - uses: actions-rs/cargo@v1
+      uses: actions-rs/cargo@v1
       with:
         command: doc
         args: --all-features
