@@ -438,8 +438,8 @@ fn normalize_path(path: &str) -> String {
             continue;
         }
 
-        let segment_end = if input.starts_with('/') {
-            match input[1..].find('/') {
+        let segment_end = if let Some(stripped) = input.strip_prefix('/') {
+            match stripped.find('/') {
                 Some(index) => index + 1,
                 None => input.len(),
             }
