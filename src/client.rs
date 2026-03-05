@@ -2733,11 +2733,13 @@ mod tests {
                     break;
                 }
             }
-            stream
-                .write_all(
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\naHTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 1\r\n\r\nb",
-                )
-                .unwrap();
+            if let Err(error) = stream.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\naHTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 1\r\n\r\nb",
+            ) {
+                if error.kind() != std::io::ErrorKind::BrokenPipe {
+                    panic!("unexpected server write failure: {error}");
+                }
+            }
         });
 
         let mut session = Client::builder()
