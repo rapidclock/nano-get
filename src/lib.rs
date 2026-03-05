@@ -5,6 +5,15 @@
 //! The default build has zero external dependencies. Enable the `https` feature flag to add
 //! HTTPS support via the system OpenSSL library.
 //!
+//! ## Compliance Scope
+//!
+//! The crate’s compliance claim covers all client-applicable RFC 9110, RFC 9111, and RFC 9112
+//! requirements for an HTTP/1.1 `GET`/`HEAD` user agent, within the documented claim boundary.
+//!
+//! Auditable artifacts in the repository:
+//! - `docs/compliance/http11-get-head-rfc-matrix.md`
+//! - `docs/compliance/http11-get-head-requirement-test-index.md`
+//!
 //! ## Helper API
 //!
 //! ```no_run
@@ -66,7 +75,9 @@
 //! ```
 
 pub use auth::{AuthDecision, AuthHandler, AuthParam, AuthTarget, Challenge};
-pub use client::{CacheMode, Client, ClientBuilder, ConnectionPolicy, ProxyConfig, Session};
+pub use client::{
+    CacheMode, Client, ClientBuilder, ConnectionPolicy, ParserStrictness, ProxyConfig, Session,
+};
 pub use errors::NanoGetError;
 pub use request::{Header, Method, RedirectPolicy, Request};
 pub use response::{HttpVersion, Response};
@@ -213,7 +224,7 @@ fn helper_client() -> Client {
 
 #[cfg(test)]
 mod tests {
-    use crate::client::{CacheMode, Client, ConnectionPolicy};
+    use crate::client::{CacheMode, Client, ConnectionPolicy, ParserStrictness};
     use crate::{get_http_bytes, Method, RedirectPolicy, Request, Url};
 
     #[test]
@@ -243,10 +254,60 @@ mod tests {
     }
 
     #[test]
+    fn http_only_text_and_head_helpers_reject_https_urls() {
+        let error = crate::get_http("https://example.com").unwrap_err();
+        assert!(matches!(error, crate::NanoGetError::UnsupportedScheme(_)));
+
+        let error = crate::head_http("https://example.com").unwrap_err();
+        assert!(matches!(error, crate::NanoGetError::UnsupportedScheme(_)));
+    }
+
+    #[test]
+    fn http_only_helpers_execute_http_paths() {
+        let error = get_http_bytes("http://127.0.0.1:9").unwrap_err();
+        assert!(matches!(
+            error,
+            crate::NanoGetError::Connect(_) | crate::NanoGetError::Io(_)
+        ));
+
+        let error = crate::head_http("http://127.0.0.1:9").unwrap_err();
+        assert!(matches!(
+            error,
+            crate::NanoGetError::Connect(_) | crate::NanoGetError::Io(_)
+        ));
+    }
+
+    #[cfg(feature = "https")]
+    #[test]
+    fn https_only_helpers_reject_http_urls() {
+        let error = crate::get_https("http://example.com").unwrap_err();
+        assert!(matches!(error, crate::NanoGetError::UnsupportedScheme(_)));
+
+        let error = crate::get_https_bytes("http://example.com").unwrap_err();
+        assert!(matches!(error, crate::NanoGetError::UnsupportedScheme(_)));
+
+        let error = crate::head_https("http://example.com").unwrap_err();
+        assert!(matches!(error, crate::NanoGetError::UnsupportedScheme(_)));
+    }
+
+    #[cfg(feature = "https")]
+    #[test]
+    fn https_only_helpers_execute_https_paths() {
+        let error = crate::get_https_bytes("https://127.0.0.1:9").unwrap_err();
+        assert!(matches!(
+            error,
+            crate::NanoGetError::Connect(_)
+                | crate::NanoGetError::Io(_)
+                | crate::NanoGetError::Tls(_)
+        ));
+    }
+
+    #[test]
     fn client_builder_is_available() {
         let _client = Client::builder()
             .connection_policy(ConnectionPolicy::Reuse)
             .cache_mode(CacheMode::Memory)
+            .parser_strictness(ParserStrictness::Lenient)
             .build();
     }
 }

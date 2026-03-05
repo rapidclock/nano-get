@@ -453,6 +453,14 @@ mod tests {
             .with_redirect_policy(RedirectPolicy::follow(5));
         assert_eq!(request.method(), Method::Head);
         assert_eq!(request.redirect_policy().max_redirects(), Some(5));
+        assert_eq!(RedirectPolicy::none().max_redirects(), None);
+    }
+
+    #[test]
+    fn set_redirect_policy_updates_in_place() {
+        let mut request = Request::get("http://example.com").unwrap();
+        request.set_redirect_policy(RedirectPolicy::follow(2));
+        assert_eq!(request.redirect_policy().max_redirects(), Some(2));
     }
 
     #[test]
@@ -530,9 +538,28 @@ mod tests {
         request
             .if_modified_since(UNIX_EPOCH + Duration::from_secs(784_111_777))
             .unwrap();
+        request
+            .if_unmodified_since(UNIX_EPOCH + Duration::from_secs(784_111_777))
+            .unwrap();
+        request.if_match("\"etag\"").unwrap();
         assert_eq!(
             request.header("if-modified-since"),
             Some("Sun, 06 Nov 1994 08:49:37 GMT")
         );
+        assert_eq!(
+            request.header("if-unmodified-since"),
+            Some("Sun, 06 Nov 1994 08:49:37 GMT")
+        );
+        assert_eq!(request.header("if-match"), Some("\"etag\""));
+    }
+
+    #[test]
+    fn range_helper_supports_open_ended_ranges_and_rejects_invalid_values() {
+        let mut request = Request::get("http://example.com").unwrap();
+        request.range_bytes(Some(128), None).unwrap();
+        assert_eq!(request.header("range"), Some("bytes=128-"));
+
+        let error = request.range_bytes(Some(10), Some(2)).unwrap_err();
+        assert!(matches!(error, NanoGetError::InvalidHeaderValue(_)));
     }
 }

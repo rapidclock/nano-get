@@ -38,6 +38,10 @@ pub enum NanoGetError {
     InvalidChunk(String),
     /// Transfer encoding is unsupported by this crate.
     UnsupportedTransferEncoding(String),
+    /// Response used ambiguous body framing.
+    AmbiguousResponseFraming(String),
+    /// Response body ended before the declared framing boundary.
+    IncompleteMessage(String),
     /// Redirect chain exceeded the configured maximum.
     RedirectLimitExceeded(usize),
     /// Response body could not be decoded as UTF-8.
@@ -56,6 +60,8 @@ pub enum NanoGetError {
     ProtocolManagedHeader(String),
     /// Caller attempted to set a forbidden hop-by-hop header.
     HopByHopHeader(String),
+    /// Conditional request header combination was invalid.
+    InvalidConditionalRequest(String),
 }
 
 impl NanoGetError {
@@ -93,6 +99,10 @@ impl Display for NanoGetError {
             Self::UnsupportedTransferEncoding(value) => {
                 write!(f, "unsupported transfer-encoding: {value}")
             }
+            Self::AmbiguousResponseFraming(message) => {
+                write!(f, "ambiguous response framing: {message}")
+            }
+            Self::IncompleteMessage(message) => write!(f, "incomplete message: {message}"),
             Self::RedirectLimitExceeded(limit) => {
                 write!(f, "redirect limit exceeded after {limit} hops")
             }
@@ -113,6 +123,9 @@ impl Display for NanoGetError {
                 )
             }
             Self::HopByHopHeader(name) => write!(f, "hop-by-hop header is not allowed: {name}"),
+            Self::InvalidConditionalRequest(message) => {
+                write!(f, "invalid conditional request: {message}")
+            }
         }
     }
 }
@@ -136,5 +149,80 @@ impl From<io::Error> for NanoGetError {
 impl From<Utf8Error> for NanoGetError {
     fn from(error: Utf8Error) -> Self {
         Self::InvalidUtf8(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+    use std::io;
+
+    use super::NanoGetError;
+
+    #[test]
+    fn formats_new_error_variants() {
+        let ambiguous = NanoGetError::AmbiguousResponseFraming("bad".to_string());
+        assert_eq!(ambiguous.to_string(), "ambiguous response framing: bad");
+
+        let incomplete = NanoGetError::IncompleteMessage("eof".to_string());
+        assert_eq!(incomplete.to_string(), "incomplete message: eof");
+
+        let conditional = NanoGetError::InvalidConditionalRequest("invalid".to_string());
+        assert_eq!(
+            conditional.to_string(),
+            "invalid conditional request: invalid"
+        );
+    }
+
+    #[test]
+    fn formats_all_error_variants_and_sources() {
+        let invalid = vec![0xff];
+        let utf8_error = std::str::from_utf8(&invalid).unwrap_err();
+        let io_error = io::Error::new(io::ErrorKind::Other, "io");
+        let connect_error = io::Error::new(io::ErrorKind::ConnectionRefused, "connect");
+
+        let variants = vec![
+            NanoGetError::InvalidUrl("url".to_string()),
+            NanoGetError::UnsupportedScheme("ftp".to_string()),
+            NanoGetError::UnsupportedProxyScheme("https".to_string()),
+            NanoGetError::HttpsFeatureRequired,
+            NanoGetError::InvalidHeaderName("x".to_string()),
+            NanoGetError::InvalidHeaderValue("y".to_string()),
+            NanoGetError::Connect(connect_error),
+            NanoGetError::Io(io_error),
+            NanoGetError::Tls("tls".to_string()),
+            NanoGetError::ProxyConnectFailed(407, "Proxy".to_string()),
+            NanoGetError::MalformedChallenge("challenge".to_string()),
+            NanoGetError::MalformedStatusLine("status".to_string()),
+            NanoGetError::MalformedHeader("header".to_string()),
+            NanoGetError::InvalidContentLength("len".to_string()),
+            NanoGetError::InvalidChunk("chunk".to_string()),
+            NanoGetError::UnsupportedTransferEncoding("gzip".to_string()),
+            NanoGetError::AmbiguousResponseFraming("ambiguous".to_string()),
+            NanoGetError::IncompleteMessage("incomplete".to_string()),
+            NanoGetError::RedirectLimitExceeded(3),
+            NanoGetError::InvalidUtf8(utf8_error),
+            NanoGetError::Cache("cache".to_string()),
+            NanoGetError::Pipeline("pipeline".to_string()),
+            NanoGetError::Authentication("auth".to_string()),
+            NanoGetError::AuthenticationLoop("loop".to_string()),
+            NanoGetError::AuthenticationRejected("rejected".to_string()),
+            NanoGetError::ProtocolManagedHeader("host".to_string()),
+            NanoGetError::HopByHopHeader("te".to_string()),
+            NanoGetError::InvalidConditionalRequest("conditional".to_string()),
+        ];
+
+        for error in variants {
+            assert!(!error.to_string().is_empty());
+        }
+
+        let io_error = NanoGetError::from(io::Error::new(io::ErrorKind::Other, "io"));
+        assert!(io_error.source().is_some());
+        let invalid = vec![0xff];
+        let utf8_error = NanoGetError::from(std::str::from_utf8(&invalid).unwrap_err());
+        assert!(utf8_error.source().is_some());
+        assert!(NanoGetError::UnsupportedScheme("ftp".to_string())
+            .source()
+            .is_none());
     }
 }

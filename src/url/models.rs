@@ -370,7 +370,10 @@ fn normalize_path(path: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::Url;
+    use super::{
+        default_port_for_scheme, normalize_path, parse_target, split_authority_and_target, ToUrl,
+        Url,
+    };
     use crate::errors::NanoGetError;
 
     #[test]
@@ -442,6 +445,34 @@ mod tests {
     }
 
     #[test]
+    fn rejects_empty_and_userinfo_urls() {
+        assert!(matches!(Url::parse(""), Err(NanoGetError::InvalidUrl(_))));
+        assert!(matches!(
+            Url::parse("http://user@example.com"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_ports_and_ipv6_authorities() {
+        assert!(matches!(
+            Url::parse("http://example.com:abc"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            Url::parse("http://[::1]bad"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+    }
+
+    #[test]
+    fn resolves_scheme_relative_redirects() {
+        let base = Url::parse("https://example.com/one").unwrap();
+        let resolved = base.resolve("//cdn.example.com/path").unwrap();
+        assert_eq!(resolved.full_url(), "https://cdn.example.com/path");
+    }
+
+    #[test]
     fn builds_absolute_and_authority_forms() {
         let url = Url::parse("http://example.com:8080/path?x=1").unwrap();
         assert_eq!(url.absolute_form(), "http://example.com:8080/path?x=1");
@@ -455,5 +486,60 @@ mod tests {
         let three = Url::parse("http://example.com/other").unwrap();
         assert!(one.same_authority(&two));
         assert!(!one.same_authority(&three));
+    }
+
+    #[test]
+    fn covers_display_and_tourl_variants() {
+        let url = Url::parse("http://example.com/path").unwrap();
+        assert_eq!(url.to_string(), "http://example.com/path");
+        assert_eq!(url.to_url().unwrap(), url);
+        assert_eq!(<&Url as ToUrl>::to_url(&&url).unwrap(), url);
+    }
+
+    #[test]
+    fn covers_missing_hosts_and_invalid_targets() {
+        assert!(matches!(
+            Url::parse("http://"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            Url::parse("http:///path"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            split_authority_and_target(""),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            Url::parse("http://:80/path"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            parse_target("not-a-path"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert_eq!(
+            parse_target("?x=1").unwrap(),
+            ("/".to_string(), Some("x=1".to_string()))
+        );
+    }
+
+    #[test]
+    fn covers_helper_branches_for_paths_and_ports() {
+        let ipv6 = Url::parse("http://[::1]/").unwrap();
+        assert_eq!(ipv6.authority_form(), "[::1]:80");
+
+        assert_eq!(default_port_for_scheme("http"), Some(80));
+        assert_eq!(default_port_for_scheme("https"), Some(443));
+        assert_eq!(default_port_for_scheme("ws"), None);
+
+        assert_eq!(super::base_directory("/a/b/"), "/a/b/");
+        assert_eq!(super::base_directory("/a"), "/");
+        assert_eq!(super::base_directory("a"), "/");
+        assert_eq!(normalize_path("/a/b/"), "/a/b/");
+
+        let base = Url::parse("http://example.com/path").unwrap();
+        let error = base.resolve("   ").unwrap_err();
+        assert!(matches!(error, NanoGetError::InvalidUrl(_)));
     }
 }

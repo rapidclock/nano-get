@@ -399,7 +399,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        basic_authorization_value, parse_authenticate_headers, AuthDecision, AuthHandler,
+        basic_authorization_value, looks_like_auth_param, parse_auth_params,
+        parse_authenticate_headers, parse_quoted_string, parse_token, AuthDecision, AuthHandler,
         AuthTarget, BasicAuthHandler, Challenge,
     };
     use crate::errors::NanoGetError;
@@ -466,6 +467,7 @@ mod tests {
             "Basic dXNlcjpwYXNz"
         );
         assert_eq!(basic_authorization_value("user", ""), "Basic dXNlcjo=");
+        assert_eq!(basic_authorization_value("", ""), "Basic Og==");
     }
 
     #[test]
@@ -495,6 +497,145 @@ mod tests {
         assert!(matches!(decision, AuthDecision::UseHeaders(_)));
     }
 
+    #[test]
+    fn basic_handler_propagates_header_validation_errors() {
+        let handler = BasicAuthHandler {
+            header_value: "line\nbreak".to_string(),
+            target: AuthTarget::Origin,
+        };
+        let response = Response {
+            version: HttpVersion::Http11,
+            status_code: 401,
+            reason_phrase: "Unauthorized".to_string(),
+            headers: Vec::new(),
+            trailers: Vec::new(),
+            body: Vec::new(),
+        };
+        let error = handler
+            .respond(
+                AuthTarget::Origin,
+                &Url::parse("http://example.com").unwrap(),
+                &[Challenge {
+                    scheme: "Basic".to_string(),
+                    token68: None,
+                    params: Vec::new(),
+                }],
+                &Request::get("http://example.com").unwrap(),
+                &response,
+            )
+            .unwrap_err();
+        assert!(matches!(error, NanoGetError::InvalidHeaderValue(_)));
+    }
+
+    #[test]
+    fn basic_handler_returns_no_match_for_other_target_or_scheme() {
+        let handler = BasicAuthHandler::new("user", "pass", AuthTarget::Origin);
+        let response = Response {
+            version: HttpVersion::Http11,
+            status_code: 401,
+            reason_phrase: "Unauthorized".to_string(),
+            headers: Vec::new(),
+            trailers: Vec::new(),
+            body: Vec::new(),
+        };
+        let request = Request::get("http://example.com").unwrap();
+        let url = Url::parse("http://example.com").unwrap();
+
+        let wrong_target = handler
+            .respond(
+                AuthTarget::Proxy,
+                &url,
+                &[Challenge {
+                    scheme: "Basic".to_string(),
+                    token68: None,
+                    params: Vec::new(),
+                }],
+                &request,
+                &response,
+            )
+            .unwrap();
+        assert!(matches!(wrong_target, AuthDecision::NoMatch));
+
+        let wrong_scheme = handler
+            .respond(
+                AuthTarget::Origin,
+                &url,
+                &[Challenge {
+                    scheme: "Digest".to_string(),
+                    token68: None,
+                    params: Vec::new(),
+                }],
+                &request,
+                &response,
+            )
+            .unwrap();
+        assert!(matches!(wrong_scheme, AuthDecision::NoMatch));
+    }
+
+    #[test]
+    fn parse_headers_handles_empty_and_malformed_token68_cases() {
+        let empty = parse_authenticate_headers(&[], "www-authenticate").unwrap();
+        assert!(empty.is_empty());
+
+        let trailing = vec![Header::unchecked(
+            "WWW-Authenticate",
+            "Basic realm=\"a\", ,",
+        )];
+        let challenges = parse_authenticate_headers(&trailing, "www-authenticate").unwrap();
+        assert_eq!(challenges.len(), 1);
+
+        let malformed = vec![Header::unchecked("WWW-Authenticate", "Bearer ?")];
+        assert!(matches!(
+            parse_authenticate_headers(&malformed, "www-authenticate"),
+            Err(NanoGetError::MalformedChallenge(_))
+        ));
+
+        let bare_scheme = vec![Header::unchecked(
+            "WWW-Authenticate",
+            "Negotiate, Basic realm=\"api\"",
+        )];
+        let challenges = parse_authenticate_headers(&bare_scheme, "www-authenticate").unwrap();
+        assert_eq!(challenges[0].scheme, "Negotiate");
+        assert!(challenges[0].token68.is_none());
+    }
+
+    #[test]
+    fn private_parser_helpers_cover_error_paths() {
+        let mut index = 0usize;
+        let error = parse_auth_params(b"=oops", &mut index).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedChallenge(_)));
+
+        let mut index = 0usize;
+        let error = parse_auth_params(b"realm x", &mut index).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedChallenge(_)));
+
+        let mut index = 5usize;
+        let error = parse_auth_params(b"realm", &mut index).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedChallenge(_)));
+
+        let mut index = 0usize;
+        let error = parse_auth_params(b"realm= ", &mut index).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedChallenge(_)));
+
+        let bytes = b"token=   ";
+        assert!(!looks_like_auth_param(bytes, 0));
+        let bytes = b"token =\"x\"";
+        assert!(looks_like_auth_param(bytes, 0));
+        let bytes = b"token =!";
+        assert!(looks_like_auth_param(bytes, 0));
+
+        let mut token_index = 0usize;
+        assert!(parse_token(b"=", &mut token_index).is_none());
+
+        let mut quoted_index = 0usize;
+        let error = parse_quoted_string(b"token", &mut quoted_index).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedChallenge(_)));
+
+        let mut escaped_index = 0usize;
+        let error = parse_quoted_string(br#""unterminated\"#, &mut escaped_index).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedChallenge(_)));
+    }
+
     struct NoopHandler;
 
     impl AuthHandler for NoopHandler {
@@ -513,5 +654,27 @@ mod tests {
     #[test]
     fn auth_handlers_are_object_safe() {
         let _handler: Arc<dyn AuthHandler + Send + Sync> = Arc::new(NoopHandler);
+    }
+
+    #[test]
+    fn noop_handler_returns_nomatch() {
+        let handler = NoopHandler;
+        let decision = handler
+            .respond(
+                AuthTarget::Origin,
+                &Url::parse("http://example.com").unwrap(),
+                &[],
+                &Request::get("http://example.com").unwrap(),
+                &Response {
+                    version: HttpVersion::Http11,
+                    status_code: 401,
+                    reason_phrase: "Unauthorized".to_string(),
+                    headers: Vec::new(),
+                    trailers: Vec::new(),
+                    body: Vec::new(),
+                },
+            )
+            .unwrap();
+        assert!(matches!(decision, AuthDecision::NoMatch));
     }
 }

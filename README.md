@@ -264,12 +264,11 @@ Additional cache behavior:
 - `Vary`-keyed variants
 - RFC-style `Age` handling in freshness calculations
 - `HEAD` metadata refresh for cached `GET` responses
+- cacheable `206 Partial Content` storage and safe partial combination
 - conservative auth-aware caching rules
 
 Deliberate exclusions:
 
-- caching `206 Partial Content`
-- partial response combination
 - compression
 - cookies
 - async I/O
@@ -277,12 +276,22 @@ Deliberate exclusions:
 
 ## Compliance
 
-The crate’s compliance claim is limited to the client-applicable parts of RFC 9110, RFC 9111, and
-RFC 9112 for an HTTP/1.1 `GET`/`HEAD` client.
+The crate’s compliance claim covers all client-applicable RFC 9110, RFC 9111, and RFC 9112
+requirements for an HTTP/1.1 `GET`/`HEAD` user agent, within the documented claim boundary.
 
-The auditable requirement matrix lives at:
+Auditable artifacts:
 
 - [docs/compliance/http11-get-head-rfc-matrix.md](docs/compliance/http11-get-head-rfc-matrix.md)
+- [docs/compliance/http11-get-head-requirement-test-index.md](docs/compliance/http11-get-head-requirement-test-index.md)
+
+Local compliance/coverage commands:
+
+- `cargo llvm-cov clean --workspace`
+- `cargo llvm-cov --workspace --no-default-features --features http --lcov --output-path /tmp/http_cov.info`
+- `python3 tools/check_line_coverage.py --lcov /tmp/http_cov.info --root . --require 100`
+- `cargo llvm-cov clean --workspace`
+- `cargo llvm-cov --workspace --all-features --lcov --output-path /tmp/all_cov.info`
+- `python3 tools/check_line_coverage.py --lcov /tmp/all_cov.info --root . --require 100`
 
 ## Notes
 

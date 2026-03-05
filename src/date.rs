@@ -192,7 +192,7 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
 mod tests {
     use std::time::{Duration, UNIX_EPOCH};
 
-    use super::{format_http_date, parse_http_date};
+    use super::{days_in_month, format_http_date, is_leap_year, parse_http_date};
 
     #[test]
     fn formats_http_dates() {
@@ -230,5 +230,35 @@ mod tests {
     #[test]
     fn rejects_invalid_dates() {
         assert!(parse_http_date("bogus").is_none());
+        assert!(parse_http_date("Sun, 32 Nov 1994 08:49:37 GMT").is_none());
+        assert!(parse_http_date("Sun, 06 Nov 1994 25:49:37 GMT").is_none());
+        assert!(parse_http_date("Sun, 06 Nov 1994 08:49:37 PST").is_none());
+        assert!(parse_http_date("Sunday, 06-Nov-94-extra 08:49:37 GMT").is_none());
+        assert!(parse_http_date("Sun Nov  6 08:49:37 1994 extra").is_none());
+        assert!(parse_http_date("Sun, 00 Nov 1994 08:49:37 GMT").is_none());
+        assert!(parse_http_date("Sun, 06 Nov 1964 08:49:37 GMT").is_none());
+    }
+
+    #[test]
+    fn rejects_dates_before_unix_epoch_for_formatting() {
+        let error = format_http_date(UNIX_EPOCH - Duration::from_secs(1)).unwrap_err();
+        assert!(matches!(
+            error,
+            crate::errors::NanoGetError::InvalidHeaderValue(_)
+        ));
+    }
+
+    #[test]
+    fn calendar_helpers_cover_leap_and_month_variants() {
+        assert_eq!(days_in_month(2024, 1), 31);
+        assert_eq!(days_in_month(2024, 2), 29);
+        assert_eq!(days_in_month(2023, 2), 28);
+        assert_eq!(days_in_month(2023, 99), 0);
+        assert!(is_leap_year(2000));
+        assert!(!is_leap_year(1900));
+        assert!(!is_leap_year(2023));
+
+        let epoch = format_http_date(UNIX_EPOCH).unwrap();
+        assert_eq!(epoch, "Thu, 01 Jan 1970 00:00:00 GMT");
     }
 }

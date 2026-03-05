@@ -1,10 +1,13 @@
 mod support;
 
 use nano_get::{
-    get, get_bytes, head, CacheMode, Client, ConnectionPolicy, ProxyConfig, RedirectPolicy, Request,
+    get, get_bytes, head, CacheMode, Client, ConnectionPolicy, ParserStrictness, ProxyConfig,
+    RedirectPolicy, Request,
 };
 
-use support::{spawn_http_server, spawn_persistent_http_server};
+use support::{
+    spawn_http_server, spawn_persistent_http_server, spawn_scripted_http_server, Interaction,
+};
 
 #[test]
 fn get_returns_text_body() {
@@ -23,6 +26,27 @@ fn get_bytes_returns_binary_body() {
     ]);
     let result = get_bytes(format!("{}/bytes", server.base_url)).unwrap();
     assert_eq!(result, vec![0xff, 0x00, 0x7f]);
+    server.join();
+}
+
+#[test]
+fn client_helper_methods_get_bytes_head_and_execute_ref_work() {
+    let server = spawn_http_server(vec![
+        b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\none".to_vec(),
+        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nX-Head: yes\r\n\r\n".to_vec(),
+        b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\ntwo".to_vec(),
+    ]);
+    let client = Client::builder().build();
+    let bytes = client
+        .get_bytes(format!("{}/bytes", server.base_url))
+        .unwrap();
+    let head_response = client.head(format!("{}/head", server.base_url)).unwrap();
+    let request = Request::get(format!("{}/execute-ref", server.base_url)).unwrap();
+    let response = client.execute_ref(&request).unwrap();
+
+    assert_eq!(bytes, b"one");
+    assert_eq!(head_response.header("x-head"), Some("yes"));
+    assert_eq!(response.body_text().unwrap(), "two");
     server.join();
 }
 
@@ -533,6 +557,136 @@ fn range_requests_send_range_headers_and_parse_partial_content() {
     assert_eq!(response.header("content-range"), Some("bytes 2-5/10"));
     assert_eq!(response.body_text().unwrap(), "cdef");
     assert!(requests[0].contains("Range: bytes=2-5\r\n"));
+    server.join();
+}
+
+#[test]
+fn strict_parser_rejects_lf_only_responses() {
+    let server = support::spawn_handler_http_server(1, |_| {
+        b"HTTP/1.1 200 OK\nContent-Length: 2\n\nok".to_vec()
+    });
+    let error = Client::builder()
+        .build()
+        .execute(Request::get(format!("{}/strict", server.base_url)).unwrap())
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        nano_get::NanoGetError::MalformedStatusLine(_)
+    ));
+    server.join();
+}
+
+#[test]
+fn lenient_parser_accepts_lf_only_responses() {
+    let server = support::spawn_handler_http_server(1, |_| {
+        b"HTTP/1.1 200 OK\nContent-Length: 2\n\nok".to_vec()
+    });
+    let response = Client::builder()
+        .parser_strictness(ParserStrictness::Lenient)
+        .build()
+        .execute(Request::get(format!("{}/lenient", server.base_url)).unwrap())
+        .unwrap();
+    assert_eq!(response.body_text().unwrap(), "ok");
+    server.join();
+}
+
+#[test]
+fn if_range_requires_range_header() {
+    let mut request = Request::get("http://example.com").unwrap();
+    request.if_range("\"v1\"").unwrap();
+    let error = Client::default().execute(request).unwrap_err();
+    assert!(matches!(
+        error,
+        nano_get::NanoGetError::InvalidConditionalRequest(_)
+    ));
+}
+
+#[test]
+fn if_range_rejects_weak_etags() {
+    let mut request = Request::get("http://example.com").unwrap();
+    request.range_bytes(Some(0), Some(1)).unwrap();
+    request.if_range("W/\"v1\"").unwrap();
+    let error = Client::default().execute(request).unwrap_err();
+    assert!(matches!(
+        error,
+        nano_get::NanoGetError::InvalidConditionalRequest(_)
+    ));
+}
+
+#[test]
+fn partial_responses_are_combined_into_a_cacheable_full_representation() {
+    let server = spawn_http_server(vec![
+        b"HTTP/1.1 206 Partial Content\r\nCache-Control: max-age=60\r\nETag: \"v1\"\r\nContent-Range: bytes 0-2/6\r\nContent-Length: 3\r\n\r\nabc".to_vec(),
+        b"HTTP/1.1 206 Partial Content\r\nCache-Control: max-age=60\r\nETag: \"v1\"\r\nContent-Range: bytes 3-5/6\r\nContent-Length: 3\r\n\r\ndef".to_vec(),
+    ]);
+
+    let client = Client::builder().cache_mode(CacheMode::Memory).build();
+    let url = format!("{}/partial-combine", server.base_url);
+
+    let mut first = Request::get(&url).unwrap();
+    first.range_bytes(Some(0), Some(2)).unwrap();
+    let mut second = Request::get(&url).unwrap();
+    second.range_bytes(Some(3), Some(5)).unwrap();
+
+    let first_response = client.execute(first).unwrap();
+    let second_response = client.execute(second).unwrap();
+    let full_response = client.execute(Request::get(&url).unwrap()).unwrap();
+
+    assert_eq!(first_response.status_code, 206);
+    assert_eq!(second_response.status_code, 206);
+    assert_eq!(full_response.status_code, 200);
+    assert_eq!(full_response.body_text().unwrap(), "abcdef");
+    assert_eq!(server.request_lines.lock().unwrap().len(), 2);
+    server.join();
+}
+
+#[test]
+fn if_range_mismatch_with_only_if_cached_returns_504() {
+    let server = spawn_http_server(vec![
+        b"HTTP/1.1 200 OK\r\nCache-Control: max-age=60\r\nETag: \"v1\"\r\nContent-Length: 6\r\n\r\nabcdef".to_vec(),
+    ]);
+
+    let client = Client::builder().cache_mode(CacheMode::Memory).build();
+    let url = format!("{}/if-range-only-if-cached", server.base_url);
+
+    client.execute(Request::get(&url).unwrap()).unwrap();
+
+    let mut ranged = Request::get(&url).unwrap();
+    ranged.range_bytes(Some(0), Some(1)).unwrap();
+    ranged.if_range("\"v2\"").unwrap();
+    ranged
+        .add_header("Cache-Control", "only-if-cached")
+        .unwrap();
+
+    let response = client.execute(ranged).unwrap();
+    assert_eq!(response.status_code, 504);
+    assert_eq!(server.request_lines.lock().unwrap().len(), 1);
+    server.join();
+}
+
+#[test]
+fn pipelining_retries_unanswered_requests_after_premature_close() {
+    let server = spawn_scripted_http_server(vec![
+        Interaction::Persistent(vec![
+            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nfirst".to_vec(),
+        ]),
+        Interaction::Once(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond".to_vec()),
+    ]);
+
+    let client = Client::builder()
+        .connection_policy(ConnectionPolicy::Reuse)
+        .build();
+    let mut session = client.session();
+    let responses = session
+        .execute_pipelined(&[
+            Request::get(format!("{}/one", server.base_url)).unwrap(),
+            Request::get(format!("{}/two", server.base_url)).unwrap(),
+        ])
+        .unwrap();
+
+    assert_eq!(responses[0].body_text().unwrap(), "first");
+    assert_eq!(responses[1].body_text().unwrap(), "second");
+    assert_eq!(*server.connection_count.lock().unwrap(), 2);
     server.join();
 }
 

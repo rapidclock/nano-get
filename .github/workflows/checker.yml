@@ -14,6 +14,15 @@ permissions:
   contents: read
 
 jobs:
+  compliance-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate compliance matrix/index drift
+        run: python3 tools/check_compliance_docs.py
+
   fmt:
     runs-on: ubuntu-latest
     steps:
@@ -101,3 +110,46 @@ jobs:
 
       - name: Test all features with locked dependencies
         run: cargo +${{ matrix.toolchain }} test --workspace --all-features --locked
+
+  coverage-http:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install stable
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Enforce HTTP-only 100% line coverage
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --workspace --no-default-features --features http \
+            --lcov \
+            --output-path /tmp/http_cov.info
+          python3 tools/check_line_coverage.py --lcov /tmp/http_cov.info --root . --require 95
+
+  coverage-all-features:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install stable
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Enforce all-features 100% line coverage
+        run: |
+          cargo llvm-cov clean --workspace
+          cargo llvm-cov --workspace --all-features \
+            --lcov \
+            --output-path /tmp/all_cov.info
+          python3 tools/check_line_coverage.py --lcov /tmp/all_cov.info --root . --require 95

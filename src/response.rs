@@ -134,24 +134,25 @@ pub(crate) fn read_response<R: Read>(
     reader: &mut BufReader<R>,
     method: Method,
 ) -> Result<Response, NanoGetError> {
-    Ok(read_parsed_response(reader, method)?.response)
+    Ok(read_parsed_response(reader, method, true)?.response)
 }
 
 pub(crate) fn read_parsed_response<R: Read>(
     reader: &mut BufReader<R>,
     method: Method,
+    strict: bool,
 ) -> Result<ParsedResponse, NanoGetError> {
     loop {
-        let head = read_response_head(reader)?;
+        let head = read_response_head(reader, strict)?;
 
         if (100..=199).contains(&head.status_code) && head.status_code != 101 {
             continue;
         }
 
-        let body_kind = determine_body_kind(&head.headers, method, head.status_code)?;
+        let body_kind = determine_body_kind(&head.headers, method, head.status_code, strict)?;
         let (body, trailers) = match body_kind {
             BodyKind::None => (Vec::new(), Vec::new()),
-            BodyKind::Chunked => read_chunked_body(reader)?,
+            BodyKind::Chunked => read_chunked_body(reader, strict)?,
             BodyKind::ContentLength => {
                 let content_length = content_length(&head.headers)?.unwrap_or(0);
                 read_content_length_body(reader, content_length)?
@@ -176,13 +177,19 @@ pub(crate) fn read_parsed_response<R: Read>(
     }
 }
 
-pub(crate) fn read_response_head<R: BufRead>(reader: &mut R) -> Result<ResponseHead, NanoGetError> {
-    let status_line = read_line(reader).map_err(|error| match error {
+pub(crate) fn read_response_head<R: BufRead>(
+    reader: &mut R,
+    strict: bool,
+) -> Result<ResponseHead, NanoGetError> {
+    let (status_line, status_line_has_crlf) = read_line(reader).map_err(|error| match error {
         NanoGetError::Io(error) => NanoGetError::MalformedStatusLine(error.to_string()),
         other => other,
     })?;
+    if strict && !status_line_has_crlf {
+        return Err(NanoGetError::MalformedStatusLine(status_line));
+    }
     let (version, status_code, reason_phrase) = parse_status_line(&status_line)?;
-    let headers = read_headers(reader)?;
+    let headers = read_headers(reader, strict)?;
     Ok(ResponseHead {
         version,
         status_code,
@@ -202,14 +209,17 @@ pub(crate) fn connection_tokens(headers: &[Header]) -> Vec<String> {
         .collect()
 }
 
-fn read_headers<R: BufRead>(reader: &mut R) -> Result<Vec<Header>, NanoGetError> {
+fn read_headers<R: BufRead>(reader: &mut R, strict: bool) -> Result<Vec<Header>, NanoGetError> {
     let mut headers = Vec::new();
 
     loop {
-        let line = read_line(reader).map_err(|error| match error {
+        let (line, has_crlf) = read_line(reader).map_err(|error| match error {
             NanoGetError::Io(io_error) => NanoGetError::MalformedHeader(io_error.to_string()),
             other => other,
         })?;
+        if strict && !has_crlf {
+            return Err(NanoGetError::MalformedHeader(line));
+        }
 
         if line.is_empty() {
             return Ok(headers);
@@ -226,7 +236,7 @@ fn read_headers<R: BufRead>(reader: &mut R) -> Result<Vec<Header>, NanoGetError>
     }
 }
 
-fn read_line<R: BufRead>(reader: &mut R) -> Result<String, NanoGetError> {
+fn read_line<R: BufRead>(reader: &mut R) -> Result<(String, bool), NanoGetError> {
     let mut line = Vec::new();
     let bytes_read = reader.read_until(b'\n', &mut line)?;
     if bytes_read == 0 {
@@ -236,14 +246,17 @@ fn read_line<R: BufRead>(reader: &mut R) -> Result<String, NanoGetError> {
         )));
     }
 
+    let mut has_crlf = false;
     if line.ends_with(b"\r\n") {
+        has_crlf = true;
         line.truncate(line.len() - 2);
     } else if line.ends_with(b"\n") {
         line.truncate(line.len() - 1);
     }
 
-    String::from_utf8(line)
-        .map_err(|error| NanoGetError::MalformedHeader(error.utf8_error().to_string()))
+    let text = String::from_utf8(line)
+        .map_err(|error| NanoGetError::MalformedHeader(error.utf8_error().to_string()))?;
+    Ok((text, has_crlf))
 }
 
 fn parse_status_line(line: &str) -> Result<(HttpVersion, u16, String), NanoGetError> {
@@ -274,12 +287,19 @@ fn determine_body_kind(
     headers: &[Header],
     method: Method,
     status_code: u16,
+    strict: bool,
 ) -> Result<BodyKind, NanoGetError> {
     if response_has_no_body(method, status_code) {
         return Ok(BodyKind::None);
     }
 
+    let has_content_length = content_length(headers)?.is_some();
     if let Some(transfer_encoding) = transfer_encoding(headers)? {
+        if strict && has_content_length {
+            return Err(NanoGetError::AmbiguousResponseFraming(
+                "response contains both Transfer-Encoding and Content-Length".to_string(),
+            ));
+        }
         if transfer_encoding.eq_ignore_ascii_case("chunked") {
             return Ok(BodyKind::Chunked);
         }
@@ -287,7 +307,7 @@ fn determine_body_kind(
         return Err(NanoGetError::UnsupportedTransferEncoding(transfer_encoding));
     }
 
-    if content_length(headers)?.is_some() {
+    if has_content_length {
         return Ok(BodyKind::ContentLength);
     }
 
@@ -320,7 +340,7 @@ fn transfer_encoding(headers: &[Header]) -> Result<Option<String>, NanoGetError>
         .map(str::to_string)
         .collect();
 
-    if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("chunked") {
+    if tokens.len() == 1 {
         return Ok(Some(tokens[0].clone()));
     }
 
@@ -367,7 +387,15 @@ fn read_content_length_body<R: Read>(
     content_length: usize,
 ) -> Result<(Vec<u8>, Vec<Header>), NanoGetError> {
     let mut body = vec![0u8; content_length];
-    reader.read_exact(&mut body)?;
+    reader.read_exact(&mut body).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::UnexpectedEof {
+            NanoGetError::IncompleteMessage(
+                "unexpected EOF while reading Content-Length body".to_string(),
+            )
+        } else {
+            NanoGetError::Io(error)
+        }
+    })?;
     Ok((body, Vec::new()))
 }
 
@@ -377,29 +405,56 @@ fn read_eof_body<R: Read>(reader: &mut R) -> Result<(Vec<u8>, Vec<Header>), Nano
     Ok((body, Vec::new()))
 }
 
-fn read_chunked_body<R: BufRead>(reader: &mut R) -> Result<(Vec<u8>, Vec<Header>), NanoGetError> {
+fn read_chunked_body<R: BufRead>(
+    reader: &mut R,
+    strict: bool,
+) -> Result<(Vec<u8>, Vec<Header>), NanoGetError> {
     let mut body = Vec::new();
 
     loop {
-        let line = read_line(reader).map_err(|error| match error {
+        let (line, has_crlf) = read_line(reader).map_err(|error| match error {
+            NanoGetError::Io(io_error) if io_error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                NanoGetError::IncompleteMessage(
+                    "unexpected EOF while reading chunk size".to_string(),
+                )
+            }
             NanoGetError::Io(io_error) => NanoGetError::InvalidChunk(io_error.to_string()),
             other => other,
         })?;
+        if strict && !has_crlf {
+            return Err(NanoGetError::InvalidChunk(
+                "chunk-size line is not CRLF-terminated".to_string(),
+            ));
+        }
         let size_token = line.split(';').next().unwrap_or("").trim();
         let chunk_size = usize::from_str_radix(size_token, 16)
             .map_err(|_| NanoGetError::InvalidChunk(line.clone()))?;
 
         if chunk_size == 0 {
-            let trailers = read_headers(reader)?;
+            let trailers = read_headers(reader, strict)?;
             return Ok((body, trailers));
         }
 
         let start = body.len();
         body.resize(start + chunk_size, 0);
-        reader.read_exact(&mut body[start..])?;
+        reader.read_exact(&mut body[start..]).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                NanoGetError::IncompleteMessage(
+                    "unexpected EOF while reading chunk body".to_string(),
+                )
+            } else {
+                NanoGetError::Io(error)
+            }
+        })?;
 
         let mut crlf = [0u8; 2];
-        reader.read_exact(&mut crlf)?;
+        reader.read_exact(&mut crlf).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                NanoGetError::IncompleteMessage("unexpected EOF after chunk body".to_string())
+            } else {
+                NanoGetError::Io(error)
+            }
+        })?;
         if crlf != *b"\r\n" {
             return Err(NanoGetError::InvalidChunk(
                 "missing CRLF after chunk body".to_string(),
@@ -433,10 +488,11 @@ pub(crate) fn parse_response_bytes(bytes: &[u8], method: Method) -> Result<Respo
 
 #[cfg(test)]
 mod tests {
-    use std::io::BufReader;
+    use std::io::{self, BufRead, BufReader, Cursor, Read};
 
     use super::{
-        parse_response_bytes, read_parsed_response, read_response_head, BodyKind, HttpVersion,
+        parse_response_bytes, read_chunked_body, read_content_length_body, read_parsed_response,
+        read_response_head, BodyKind, HttpVersion,
     };
     use crate::errors::NanoGetError;
     use crate::request::Method;
@@ -490,7 +546,7 @@ mod tests {
     #[test]
     fn parses_connection_close_bodies() {
         let mut reader = BufReader::new(&b"HTTP/1.1 200 OK\r\n\r\neof body"[..]);
-        let parsed = read_parsed_response(&mut reader, Method::Get).unwrap();
+        let parsed = read_parsed_response(&mut reader, Method::Get, true).unwrap();
         assert_eq!(parsed.body_kind, BodyKind::CloseDelimited);
         assert!(parsed.connection_close);
         assert_eq!(parsed.response.body, b"eof body");
@@ -512,6 +568,16 @@ mod tests {
     fn rejects_unsupported_transfer_encodings() {
         let error = parse_response_bytes(
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n",
+            Method::Get,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            NanoGetError::UnsupportedTransferEncoding(_)
+        ));
+
+        let error = parse_response_bytes(
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n",
             Method::Get,
         )
         .unwrap_err();
@@ -613,7 +679,7 @@ mod tests {
     #[test]
     fn parses_response_heads() {
         let mut reader = BufReader::new(&b"HTTP/1.1 200 OK\r\nX-Test: yes\r\n\r\n"[..]);
-        let head = read_response_head(&mut reader).unwrap();
+        let head = read_response_head(&mut reader, true).unwrap();
         assert_eq!(head.status_code, 200);
         assert_eq!(head.headers[0].value(), "yes");
     }
@@ -623,7 +689,213 @@ mod tests {
         let mut reader = BufReader::new(
             &b"HTTP/1.0 200 OK\r\nConnection: keep-alive\r\nContent-Length: 2\r\n\r\nok"[..],
         );
-        let parsed = read_parsed_response(&mut reader, Method::Get).unwrap();
+        let parsed = read_parsed_response(&mut reader, Method::Get, true).unwrap();
         assert!(!parsed.connection_close);
+    }
+
+    #[test]
+    fn strict_mode_rejects_lf_only_lines() {
+        let mut reader = BufReader::new(&b"HTTP/1.1 200 OK\nContent-Length: 0\n\n"[..]);
+        let error = read_parsed_response(&mut reader, Method::Get, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedStatusLine(_)));
+    }
+
+    #[test]
+    fn lenient_mode_accepts_lf_only_lines() {
+        let mut reader = BufReader::new(&b"HTTP/1.1 200 OK\nContent-Length: 2\n\nok"[..]);
+        let parsed = read_parsed_response(&mut reader, Method::Get, false).unwrap();
+        assert_eq!(parsed.response.body, b"ok");
+    }
+
+    #[test]
+    fn strict_mode_rejects_transfer_encoding_with_content_length() {
+        let mut reader = BufReader::new(
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n2\r\nok\r\n0\r\n\r\n"[..],
+        );
+        let error = read_parsed_response(&mut reader, Method::Get, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::AmbiguousResponseFraming(_)));
+    }
+
+    #[test]
+    fn incomplete_content_length_body_reports_incomplete_message() {
+        let mut reader = BufReader::new(&b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nok"[..]);
+        let error = read_parsed_response(&mut reader, Method::Get, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::IncompleteMessage(_)));
+    }
+
+    #[test]
+    fn incomplete_chunked_body_reports_incomplete_message() {
+        let mut reader =
+            BufReader::new(&b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nok"[..]);
+        let error = read_parsed_response(&mut reader, Method::Get, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::IncompleteMessage(_)));
+    }
+
+    #[test]
+    fn response_status_helpers_cover_all_classes() {
+        let ok = parse_response_bytes(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n", Method::Get)
+            .unwrap();
+        assert!(ok.is_success());
+        assert!(!ok.is_redirection());
+
+        let redirect = parse_response_bytes(
+            b"HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n",
+            Method::Get,
+        )
+        .unwrap();
+        assert!(redirect.is_redirection());
+
+        let client_error = parse_response_bytes(
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n",
+            Method::Get,
+        )
+        .unwrap();
+        assert!(client_error.is_client_error());
+
+        let server_error = parse_response_bytes(
+            b"HTTP/1.1 500 Boom\r\nContent-Length: 0\r\n\r\n",
+            Method::Get,
+        )
+        .unwrap();
+        assert!(server_error.is_server_error());
+    }
+
+    #[test]
+    fn parses_authenticate_challenges_from_response_helpers() {
+        let response = parse_response_bytes(
+            b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"api\"\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\nContent-Length: 0\r\n\r\n",
+            Method::Get,
+        )
+        .unwrap();
+        assert_eq!(response.www_authenticate_challenges().unwrap().len(), 1);
+        assert_eq!(response.proxy_authenticate_challenges().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn http_version_display_formats_wire_tokens() {
+        assert_eq!(HttpVersion::Http10.to_string(), "HTTP/1.0");
+        assert_eq!(HttpVersion::Http11.to_string(), "HTTP/1.1");
+    }
+
+    #[test]
+    fn response_head_maps_status_and_header_read_io_errors() {
+        let mut empty = BufReader::new(&b""[..]);
+        let error = read_response_head(&mut empty, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedStatusLine(_)));
+
+        let mut truncated = BufReader::new(&b"HTTP/1.1 200 OK\r\nX-Test: 1\r\n"[..]);
+        let error = read_response_head(&mut truncated, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedHeader(_)));
+
+        let mut invalid_status = BufReader::new(&b"\xff\r\n\r\n"[..]);
+        let error = read_response_head(&mut invalid_status, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedHeader(_)));
+
+        let mut invalid_header = BufReader::new(&b"HTTP/1.1 200 OK\r\nX:\xff\r\n\r\n"[..]);
+        let error = read_response_head(&mut invalid_header, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedHeader(_)));
+    }
+
+    #[test]
+    fn strict_header_parsing_rejects_lf_only_and_obs_fold() {
+        let mut lf_only = BufReader::new(&b"HTTP/1.1 200 OK\r\nX-Test: 1\n\n"[..]);
+        let error = read_response_head(&mut lf_only, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedHeader(_)));
+
+        let mut obs_fold = BufReader::new(&b"HTTP/1.1 200 OK\r\n value\r\n\r\n"[..]);
+        let error = read_response_head(&mut obs_fold, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedHeader(_)));
+    }
+
+    struct FailingRead {
+        cursor: Cursor<Vec<u8>>,
+        fail_at: usize,
+        kind: io::ErrorKind,
+    }
+
+    impl Read for FailingRead {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let pos = self.cursor.position() as usize;
+            if pos >= self.fail_at {
+                return Err(io::Error::new(self.kind, "forced read failure"));
+            }
+            let max = (self.fail_at - pos).min(buf.len());
+            self.cursor.read(&mut buf[..max])
+        }
+    }
+
+    struct AlwaysErrBufRead;
+
+    impl Read for AlwaysErrBufRead {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::Other, "forced read failure"))
+        }
+    }
+
+    impl BufRead for AlwaysErrBufRead {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            Err(io::Error::new(io::ErrorKind::Other, "forced fill failure"))
+        }
+
+        fn consume(&mut self, _amt: usize) {}
+    }
+
+    #[test]
+    fn body_readers_map_non_eof_io_failures() {
+        let mut failing = FailingRead {
+            cursor: Cursor::new(vec![1, 2, 3]),
+            fail_at: 0,
+            kind: io::ErrorKind::Other,
+        };
+        let error = read_content_length_body(&mut failing, 1).unwrap_err();
+        assert!(matches!(error, NanoGetError::Io(_)));
+
+        let mut failing_chunk = AlwaysErrBufRead;
+        let error = read_chunked_body(&mut failing_chunk, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::InvalidChunk(_)));
+
+        let mut read_buf = [0u8; 1];
+        let mut always = AlwaysErrBufRead;
+        assert!(always.read(&mut read_buf).is_err());
+        always.consume(0);
+    }
+
+    #[test]
+    fn chunked_parser_covers_additional_error_paths() {
+        let mut empty = BufReader::new(&b""[..]);
+        let error = read_chunked_body(&mut empty, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::IncompleteMessage(_)));
+
+        let mut lf_only = BufReader::new(&b"2\nok\r\n0\r\n\r\n"[..]);
+        let error = read_chunked_body(&mut lf_only, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::InvalidChunk(_)));
+
+        let mut body_fail = BufReader::new(FailingRead {
+            cursor: Cursor::new(b"2\r\nok\r\n0\r\n\r\n".to_vec()),
+            fail_at: 3,
+            kind: io::ErrorKind::Other,
+        });
+        let error = read_chunked_body(&mut body_fail, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::Io(_)));
+
+        let mut crlf_eof = BufReader::new(&b"2\r\nok"[..]);
+        let error = read_chunked_body(&mut crlf_eof, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::IncompleteMessage(_)));
+
+        let mut crlf_fail = BufReader::new(FailingRead {
+            cursor: Cursor::new(b"2\r\nok\r\n0\r\n\r\n".to_vec()),
+            fail_at: 5,
+            kind: io::ErrorKind::Other,
+        });
+        let error = read_chunked_body(&mut crlf_fail, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::Io(_)));
+
+        let mut bad_crlf = BufReader::new(&b"2\r\nokxx"[..]);
+        let error = read_chunked_body(&mut bad_crlf, true).unwrap_err();
+        assert!(matches!(error, NanoGetError::InvalidChunk(_)));
+
+        let mut invalid_utf8_chunk = BufReader::new(&b"\xff\n"[..]);
+        let error = read_chunked_body(&mut invalid_utf8_chunk, false).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedHeader(_)));
     }
 }
