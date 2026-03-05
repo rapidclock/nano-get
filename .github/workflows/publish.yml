@@ -12,6 +12,10 @@ jobs:
   publish:
     if: github.event.release.target_commitish == 'main'
     runs-on: ubuntu-latest
+    environment: publish
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -54,7 +58,11 @@ jobs:
       - name: Verify tests
         run: cargo +stable test --workspace --all-features --locked
 
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
       - name: Publish to crates.io
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo +stable publish --locked --token "$CARGO_REGISTRY_TOKEN"
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo +stable publish --locked
