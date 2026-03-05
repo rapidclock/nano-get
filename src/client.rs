@@ -416,7 +416,18 @@ impl Session {
                     &mut connection.reader,
                     request.method(),
                     self.config.parser_strictness.is_strict(),
-                )?
+                )
+            };
+            let parsed = match parsed {
+                Ok(parsed) => parsed,
+                Err(error) if pipeline_retryable_parse_error(&error) => {
+                    self.connection = None;
+                    for remaining in requests.iter().skip(index) {
+                        responses.push(self.execute_one(remaining.clone())?);
+                    }
+                    return Ok(responses);
+                }
+                Err(error) => return Err(error),
             };
             responses.push(parsed.response);
             if parsed.connection_close && index + 1 != requests.len() {
@@ -578,10 +589,7 @@ impl Session {
                 Err(error) if should_reuse && !retried => {
                     self.connection = None;
                     retried = true;
-                    if matches!(
-                        error,
-                        NanoGetError::Io(_) | NanoGetError::Connect(_) | NanoGetError::Tls(_)
-                    ) {
+                    if retryable_reconnect_error(&error) {
                         continue;
                     }
                     return Err(error);
@@ -640,7 +648,10 @@ impl Session {
         )?;
         let response_time = SystemTime::now();
         let response = parsed.response;
-        if parsed.connection_close {
+        let unexpected_head_body_bytes = request.method() == Method::Head
+            && !parsed.connection_close
+            && !connection.reader.buffer().is_empty();
+        if parsed.connection_close || unexpected_head_body_bytes {
             self.connection = None;
         }
         Ok(TimedResponse {
@@ -1801,6 +1812,18 @@ fn response_for_method(mut response: Response, method: Method) -> Response {
     response
 }
 
+fn pipeline_retryable_parse_error(error: &NanoGetError) -> bool {
+    matches!(
+        error,
+        NanoGetError::Io(_) | NanoGetError::IncompleteMessage(_)
+    )
+}
+
+fn retryable_reconnect_error(error: &NanoGetError) -> bool {
+    matches!(error, NanoGetError::Connect(_) | NanoGetError::Tls(_))
+        || pipeline_retryable_parse_error(error)
+}
+
 fn has_user_conditionals(request: &Request) -> bool {
     [
         "if-none-match",
@@ -2189,10 +2212,11 @@ mod tests {
 
     use super::{
         if_range_matches_entry, is_strong_etag, normalize_segments, parse_content_range,
-        parse_single_range, prepared_connect_headers, validate_request_conditionals, AuthContext,
-        ByteRange, ByteSegment, CacheControl, CacheEntry, CacheMode, Client, ClientBuilder,
-        ClientConfig, ConnectionPolicy, MemoryCache, ParserStrictness, PartialCacheEntry,
-        ProxyConfig, TimedResponse,
+        parse_single_range, pipeline_retryable_parse_error, prepared_connect_headers,
+        retryable_reconnect_error, validate_request_conditionals, AuthContext, ByteRange,
+        ByteSegment, CacheControl, CacheEntry, CacheMode, Client, ClientBuilder, ClientConfig,
+        ConnectionPolicy, MemoryCache, ParserStrictness, PartialCacheEntry, ProxyConfig,
+        TimedResponse,
     };
     use crate::auth::{AuthDecision, AuthHandler, AuthTarget, Challenge};
     use crate::request::{Header, Method, RedirectPolicy, Request};
@@ -3027,6 +3051,50 @@ mod tests {
         let error = session.execute_pipelined(&[request]).unwrap_err();
         assert!(matches!(error, crate::NanoGetError::MalformedStatusLine(_)));
         handle.join().unwrap();
+    }
+
+    #[test]
+    fn pipeline_retry_classifier_only_retries_close_shaped_errors() {
+        assert!(pipeline_retryable_parse_error(&crate::NanoGetError::Io(
+            std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset"),
+        )));
+        assert!(pipeline_retryable_parse_error(
+            &crate::NanoGetError::IncompleteMessage("unexpected EOF".to_string())
+        ));
+        assert!(!pipeline_retryable_parse_error(
+            &crate::NanoGetError::MalformedStatusLine(
+                "failed to read status line: unexpected EOF".to_string(),
+            )
+        ));
+        assert!(!pipeline_retryable_parse_error(
+            &crate::NanoGetError::MalformedHeader(
+                "failed to read header line: unexpected EOF".to_string(),
+            )
+        ));
+        assert!(!pipeline_retryable_parse_error(
+            &crate::NanoGetError::MalformedStatusLine("HTTP/BROKEN".to_string())
+        ));
+        assert!(!pipeline_retryable_parse_error(
+            &crate::NanoGetError::InvalidChunk("zz".to_string())
+        ));
+    }
+
+    #[test]
+    fn reconnect_retry_classifier_includes_connect_and_tls_errors() {
+        assert!(retryable_reconnect_error(&crate::NanoGetError::Connect(
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "refused"),
+        )));
+        assert!(retryable_reconnect_error(&crate::NanoGetError::Tls(
+            "handshake failed".to_string(),
+        )));
+        assert!(!retryable_reconnect_error(
+            &crate::NanoGetError::MalformedStatusLine(
+                "failed to read status line: unexpected EOF".to_string(),
+            )
+        ));
+        assert!(!retryable_reconnect_error(
+            &crate::NanoGetError::MalformedStatusLine("BROKEN".to_string())
+        ));
     }
 
     #[test]

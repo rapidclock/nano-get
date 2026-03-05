@@ -9,10 +9,10 @@ This index maps each requirement ID from
 | --- | --- |
 | 9110-9.3.1-get | `get_returns_text_body`, `get_bytes_returns_binary_body` |
 | 9110-9.3.2-head | `head_returns_metadata_and_empty_body` |
-| 9110-9.3.2-head-no-body | `head_responses_ignore_declared_body`, `head_returns_metadata_and_empty_body` |
+| 9110-9.3.2-head-no-body | `head_responses_ignore_declared_body`, `head_returns_metadata_and_empty_body`, `head_responses_with_illegal_body_bytes_do_not_poison_reused_connections` |
 | 9110-13.1-if-range | `if_range_requires_range_header`, `if_range_rejects_weak_etags`, `if_range_mismatch_with_only_if_cached_returns_504` |
 | 9110-14-range-requests | `range_requests_send_range_headers_and_parse_partial_content`, `memory_cache_stores_206_segments_and_promotes_to_full_entry` |
-| 9110-15.4-redirects | `helpers_follow_redirects`, `request_can_follow_redirects_when_configured`, `redirect_limit_is_enforced` |
+| 9110-15.4-redirects | `helpers_follow_redirects`, `request_can_follow_redirects_when_configured`, `redirect_limit_is_enforced`, `resolve_treats_scheme_colon_prefix_as_absolute_uri_reference` |
 | 9110-11-auth-challenge-parse | `parses_multiple_challenges_in_one_field`, `malformed_www_authenticate_returns_an_error`, `malformed_proxy_authenticate_returns_an_error` |
 | 9110-11-origin-auth-retry | `basic_auth_retries_on_401`, `generic_auth_handler_retries_on_401`, `repeated_401_returns_the_final_response_without_looping` |
 | 9110-11-proxy-auth-retry | `basic_proxy_auth_retries_on_407`, `generic_proxy_auth_handler_retries_on_407`, `repeated_407_returns_the_final_response_without_looping` |
@@ -38,11 +38,11 @@ This index maps each requirement ID from
 | 9112-6-message-framing | `parses_content_length_response`, `parses_chunked_responses_and_trailers`, `parses_connection_close_bodies` |
 | 9112-6.1-transfer-encoding | `rejects_unsupported_transfer_encodings`, `strict_mode_rejects_transfer_encoding_with_content_length` |
 | 9112-6.2-content-length | `accepts_duplicate_content_lengths_with_equal_numeric_values`, `rejects_mismatched_duplicate_content_lengths`, `rejects_non_numeric_content_lengths` |
-| 9112-6.3-invalid-framing-rejection | `rejects_invalid_status_lines`, `rejects_malformed_headers`, `rejects_invalid_chunk_sizes`, `strict_header_parsing_rejects_lf_only_and_obs_fold` |
+| 9112-6.3-invalid-framing-rejection | `rejects_invalid_status_lines`, `rejects_malformed_headers`, `rejects_invalid_chunk_sizes`, `strict_header_parsing_rejects_lf_only_and_obs_fold`, `rejects_excessive_header_count`, `rejects_overly_long_lines` |
 | 9112-6.3-close-delimited-body | `eof_delimited_bodies_are_supported`, `parses_connection_close_bodies` |
 | 9112-15-interim-responses | `read_response_head_skips_interim_responses`, `skips_interim_responses_but_not_switching_protocols` |
-| 9112-9.3-persistent-connections | `session_reuses_keep_alive_connections`, `keep_alive_is_honored_for_http_10`, `execute_pipelined_handles_connection_close_on_final_response` |
+| 9112-9.3-persistent-connections | `session_reuses_keep_alive_connections`, `session_retries_when_reused_connection_is_stale_closed`, `head_responses_with_illegal_body_bytes_do_not_poison_reused_connections`, `keep_alive_is_honored_for_http_10`, `execute_pipelined_handles_connection_close_on_final_response` |
 | 9112-9.3.2-pipelining | `session_supports_pipelined_get_requests`, `execute_pipelined_validates_requests_before_network_io` |
-| 9112-9.3.1-retry-unanswered-safe | `pipelining_retries_unanswered_requests_after_premature_close` |
+| 9112-9.3.1-retry-unanswered-safe | `pipelining_retries_unanswered_requests_after_premature_close`, `pipelining_retries_unanswered_requests_when_peer_closes_without_connection_close_header` |
 | 9112-7.6.1-hop-by-hop | `rejects_protocol_managed_headers`, `rejects_hop_by_hop_headers`, `origin_authorization_is_not_sent_on_connect_requests` |
 | 9112-server-only-behavior | n/a |

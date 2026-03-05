@@ -205,6 +205,131 @@ fn session_reuses_keep_alive_connections() {
 }
 
 #[test]
+fn session_retries_when_reused_connection_is_stale_closed() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connection_count = Arc::new(AtomicUsize::new(0));
+    let connection_count_for_thread = Arc::clone(&connection_count);
+
+    let handle = thread::spawn(move || {
+        let (mut first_stream, _) = listener.accept().unwrap();
+        connection_count_for_thread.fetch_add(1, Ordering::SeqCst);
+
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 256];
+        loop {
+            let read = first_stream.read(&mut chunk).unwrap();
+            assert!(read > 0, "client closed before first request completed");
+            request.extend_from_slice(&chunk[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        first_stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst")
+            .unwrap();
+        drop(first_stream);
+
+        let (mut second_stream, _) = listener.accept().unwrap();
+        connection_count_for_thread.fetch_add(1, Ordering::SeqCst);
+        request.clear();
+        loop {
+            let read = second_stream.read(&mut chunk).unwrap();
+            assert!(read > 0, "client closed before retried request completed");
+            request.extend_from_slice(&chunk[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        second_stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond")
+            .unwrap();
+    });
+
+    let base_url = format!("http://127.0.0.1:{port}");
+    let client = Client::builder()
+        .connection_policy(ConnectionPolicy::Reuse)
+        .build();
+    let mut session = client.session();
+
+    let first = session
+        .execute(Request::get(format!("{}/one", base_url)).unwrap())
+        .unwrap();
+    let second = session
+        .execute(Request::get(format!("{}/two", base_url)).unwrap())
+        .unwrap();
+
+    assert_eq!(first.body_text().unwrap(), "first");
+    assert_eq!(second.body_text().unwrap(), "second");
+    assert_eq!(connection_count.load(Ordering::SeqCst), 2);
+    handle.join().unwrap();
+}
+
+#[test]
+fn head_responses_with_illegal_body_bytes_do_not_poison_reused_connections() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connection_count = Arc::new(AtomicUsize::new(0));
+    let connection_count_for_thread = Arc::clone(&connection_count);
+
+    let handle = thread::spawn(move || {
+        let (mut first_stream, _) = listener.accept().unwrap();
+        connection_count_for_thread.fetch_add(1, Ordering::SeqCst);
+
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 256];
+        loop {
+            let read = first_stream.read(&mut chunk).unwrap();
+            assert!(read > 0, "client closed before HEAD request completed");
+            request.extend_from_slice(&chunk[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        first_stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello")
+            .unwrap();
+        drop(first_stream);
+
+        let (mut second_stream, _) = listener.accept().unwrap();
+        connection_count_for_thread.fetch_add(1, Ordering::SeqCst);
+        request.clear();
+        loop {
+            let read = second_stream.read(&mut chunk).unwrap();
+            assert!(
+                read > 0,
+                "client closed before follow-up GET request completed"
+            );
+            request.extend_from_slice(&chunk[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        second_stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+            .unwrap();
+    });
+
+    let base_url = format!("http://127.0.0.1:{port}");
+    let client = Client::builder()
+        .connection_policy(ConnectionPolicy::Reuse)
+        .build();
+    let mut session = client.session();
+
+    let head_response = session
+        .execute(Request::head(format!("{}/head", base_url)).unwrap())
+        .unwrap();
+    let get_response = session
+        .execute(Request::get(format!("{}/get", base_url)).unwrap())
+        .unwrap();
+
+    assert!(head_response.body.is_empty());
+    assert_eq!(get_response.body_text().unwrap(), "ok");
+    assert_eq!(connection_count.load(Ordering::SeqCst), 2);
+    handle.join().unwrap();
+}
+
+#[test]
 fn session_supports_pipelined_get_requests() {
     let server = spawn_persistent_http_server(vec![
         b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nalpha".to_vec(),
@@ -744,6 +869,78 @@ fn pipelining_retries_unanswered_requests_after_premature_close() {
 
     let base_url = format!("http://127.0.0.1:{port}");
 
+    let client = Client::builder()
+        .connection_policy(ConnectionPolicy::Reuse)
+        .build();
+    let mut session = client.session();
+    let responses = session
+        .execute_pipelined(&[
+            Request::get(format!("{}/one", base_url)).unwrap(),
+            Request::get(format!("{}/two", base_url)).unwrap(),
+        ])
+        .unwrap();
+
+    assert_eq!(responses[0].body_text().unwrap(), "first");
+    assert_eq!(responses[1].body_text().unwrap(), "second");
+    assert_eq!(connection_count.load(Ordering::SeqCst), 2);
+    handle.join().unwrap();
+}
+
+#[test]
+fn pipelining_retries_unanswered_requests_when_peer_closes_without_connection_close_header() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connection_count = Arc::new(AtomicUsize::new(0));
+    let connection_count_for_thread = Arc::clone(&connection_count);
+    let handle = thread::spawn(move || {
+        let (mut first_stream, _) = listener.accept().unwrap();
+        connection_count_for_thread.fetch_add(1, Ordering::SeqCst);
+
+        let mut first_request_bytes = Vec::new();
+        let mut chunk = [0u8; 512];
+        while first_request_bytes
+            .windows(4)
+            .filter(|window| *window == b"\r\n\r\n")
+            .count()
+            < 2
+        {
+            let read = first_stream.read(&mut chunk).unwrap();
+            assert!(
+                read > 0,
+                "client closed connection before both pipelined requests were sent"
+            );
+            first_request_bytes.extend_from_slice(&chunk[..read]);
+        }
+
+        first_stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst")
+            .unwrap();
+        drop(first_stream);
+
+        let (mut second_stream, _) = listener.accept().unwrap();
+        connection_count_for_thread.fetch_add(1, Ordering::SeqCst);
+        let mut second_request_bytes = Vec::new();
+        loop {
+            let read = second_stream.read(&mut chunk).unwrap();
+            assert!(
+                read > 0,
+                "client closed retry connection before sending the unanswered request"
+            );
+            second_request_bytes.extend_from_slice(&chunk[..read]);
+            if second_request_bytes
+                .windows(4)
+                .any(|window| window == b"\r\n\r\n")
+            {
+                break;
+            }
+        }
+
+        second_stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond")
+            .unwrap();
+    });
+
+    let base_url = format!("http://127.0.0.1:{port}");
     let client = Client::builder()
         .connection_policy(ConnectionPolicy::Reuse)
         .build();

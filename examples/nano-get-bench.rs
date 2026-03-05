@@ -79,6 +79,35 @@ fn bench_head(iterations: usize) -> Duration {
     elapsed
 }
 
+fn bench_pipeline(total_requests: usize, pipeline_depth: usize) -> Duration {
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".to_vec();
+    let (base_url, handle) = spawn_persistent_server(total_requests, response);
+
+    let client = Client::builder()
+        .connection_policy(ConnectionPolicy::Reuse)
+        .build();
+    let mut session = client.session();
+
+    let start = Instant::now();
+    let mut sent = 0usize;
+    while sent < total_requests {
+        let batch_size = (total_requests - sent).min(pipeline_depth);
+        let mut batch = Vec::with_capacity(batch_size);
+        for index in 0..batch_size {
+            batch.push(Request::get(format!("{}/p{}", base_url, sent + index)).expect("request"));
+        }
+        let responses = session.execute_pipelined(&batch).expect("execute");
+        assert_eq!(responses.len(), batch_size);
+        for response in responses {
+            assert_eq!(response.body, b"hello");
+        }
+        sent += batch_size;
+    }
+    let elapsed = start.elapsed();
+    handle.join().expect("join server");
+    elapsed
+}
+
 fn fmt_ops(iter: usize, d: Duration) -> f64 {
     iter as f64 / d.as_secs_f64()
 }
@@ -86,12 +115,16 @@ fn fmt_ops(iter: usize, d: Duration) -> f64 {
 fn main() {
     let warmup = 2_000;
     let iterations = 30_000;
+    let pipeline_iterations = 32_000;
+    let pipeline_depth = 8;
 
     let _ = bench_get(warmup);
     let _ = bench_head(warmup);
+    let _ = bench_pipeline(warmup, pipeline_depth);
 
     let get_time = bench_get(iterations);
     let head_time = bench_head(iterations);
+    let pipeline_time = bench_pipeline(pipeline_iterations, pipeline_depth);
 
     println!(
         "GET  {} ops in {:?} => {:.0} req/s",
@@ -104,5 +137,12 @@ fn main() {
         iterations,
         head_time,
         fmt_ops(iterations, head_time)
+    );
+    println!(
+        "PIPE {} ops in {:?} => {:.0} req/s (depth={})",
+        pipeline_iterations,
+        pipeline_time,
+        fmt_ops(pipeline_iterations, pipeline_time),
+        pipeline_depth
     );
 }

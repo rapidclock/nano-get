@@ -6,6 +6,11 @@ use crate::auth::{parse_authenticate_headers, Challenge};
 use crate::errors::NanoGetError;
 use crate::request::{Header, Method};
 
+const READ_CHUNK_SIZE: usize = 8 * 1024;
+const MAX_HEADER_COUNT: usize = 1024;
+const MAX_LINE_BYTES: usize = 16 * 1024;
+const SMALL_BODY_FAST_PATH_LIMIT: usize = 64 * 1024;
+
 /// HTTP protocol version reported by the server response line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpVersion {
@@ -182,6 +187,9 @@ pub(crate) fn read_response_head<R: BufRead>(
     strict: bool,
 ) -> Result<ResponseHead, NanoGetError> {
     let (status_line, status_line_has_crlf) = read_line(reader).map_err(|error| match error {
+        NanoGetError::Io(io_error) if io_error.kind() == std::io::ErrorKind::UnexpectedEof => {
+            NanoGetError::IncompleteMessage("unexpected EOF while reading status line".to_string())
+        }
         NanoGetError::Io(error) => NanoGetError::MalformedStatusLine(error.to_string()),
         NanoGetError::MalformedHeader(line) => NanoGetError::MalformedStatusLine(line),
         other => other,
@@ -204,6 +212,11 @@ fn read_headers<R: BufRead>(reader: &mut R, strict: bool) -> Result<Vec<Header>,
 
     loop {
         let (line, has_crlf) = read_line(reader).map_err(|error| match error {
+            NanoGetError::Io(io_error) if io_error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                NanoGetError::IncompleteMessage(
+                    "unexpected EOF while reading header section".to_string(),
+                )
+            }
             NanoGetError::Io(io_error) => NanoGetError::MalformedHeader(io_error.to_string()),
             other => other,
         })?;
@@ -222,18 +235,29 @@ fn read_headers<R: BufRead>(reader: &mut R, strict: bool) -> Result<Vec<Header>,
         let (name, value) = line
             .split_once(':')
             .ok_or_else(|| NanoGetError::MalformedHeader(line.clone()))?;
+        if headers.len() >= MAX_HEADER_COUNT {
+            return Err(NanoGetError::MalformedHeader(
+                "too many response headers".to_string(),
+            ));
+        }
         headers.push(Header::new(name.to_string(), value.trim().to_string())?);
     }
 }
 
 fn read_line<R: BufRead>(reader: &mut R) -> Result<(String, bool), NanoGetError> {
     let mut line = Vec::new();
-    let bytes_read = reader.read_until(b'\n', &mut line)?;
+    let mut limited = reader.take((MAX_LINE_BYTES + 1) as u64);
+    let bytes_read = limited.read_until(b'\n', &mut line)?;
     if bytes_read == 0 {
         return Err(NanoGetError::Io(std::io::Error::new(
             std::io::ErrorKind::UnexpectedEof,
             "unexpected EOF",
         )));
+    }
+    if line.len() > MAX_LINE_BYTES {
+        return Err(NanoGetError::MalformedHeader(
+            "line exceeds maximum length".to_string(),
+        ));
     }
 
     let mut has_crlf = false;
@@ -376,16 +400,27 @@ fn read_content_length_body<R: Read>(
     reader: &mut R,
     content_length: usize,
 ) -> Result<(Vec<u8>, Vec<Header>), NanoGetError> {
-    let mut body = vec![0u8; content_length];
-    reader.read_exact(&mut body).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::UnexpectedEof {
-            NanoGetError::IncompleteMessage(
-                "unexpected EOF while reading Content-Length body".to_string(),
-            )
-        } else {
-            NanoGetError::Io(error)
-        }
-    })?;
+    if content_length <= SMALL_BODY_FAST_PATH_LIMIT {
+        let mut body = vec![0u8; content_length];
+        reader.read_exact(&mut body).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                NanoGetError::IncompleteMessage(
+                    "unexpected EOF while reading Content-Length body".to_string(),
+                )
+            } else {
+                NanoGetError::Io(error)
+            }
+        })?;
+        return Ok((body, Vec::new()));
+    }
+
+    let mut body = Vec::with_capacity(SMALL_BODY_FAST_PATH_LIMIT);
+    read_exact_into_vec(
+        reader,
+        &mut body,
+        content_length,
+        "unexpected EOF while reading Content-Length body",
+    )?;
     Ok((body, Vec::new()))
 }
 
@@ -425,17 +460,31 @@ fn read_chunked_body<R: BufRead>(
             return Ok((body, trailers));
         }
 
-        let start = body.len();
-        body.resize(start + chunk_size, 0);
-        reader.read_exact(&mut body[start..]).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::UnexpectedEof {
-                NanoGetError::IncompleteMessage(
-                    "unexpected EOF while reading chunk body".to_string(),
-                )
-            } else {
-                NanoGetError::Io(error)
+        if body.len().checked_add(chunk_size).is_none() {
+            return Err(NanoGetError::InvalidChunk(
+                "chunk-size overflow while assembling body".to_string(),
+            ));
+        }
+        if chunk_size <= SMALL_BODY_FAST_PATH_LIMIT {
+            let start = body.len();
+            body.resize(start + chunk_size, 0);
+            if let Err(error) = reader.read_exact(&mut body[start..]) {
+                body.truncate(start);
+                if error.kind() == std::io::ErrorKind::UnexpectedEof {
+                    return Err(NanoGetError::IncompleteMessage(
+                        "unexpected EOF while reading chunk body".to_string(),
+                    ));
+                }
+                return Err(NanoGetError::Io(error));
             }
-        })?;
+        } else {
+            read_exact_into_vec(
+                reader,
+                &mut body,
+                chunk_size,
+                "unexpected EOF while reading chunk body",
+            )?;
+        }
 
         let mut crlf = [0u8; 2];
         reader.read_exact(&mut crlf).map_err(|error| {
@@ -451,6 +500,32 @@ fn read_chunked_body<R: BufRead>(
             ));
         }
     }
+}
+
+fn read_exact_into_vec<R: Read>(
+    reader: &mut R,
+    body: &mut Vec<u8>,
+    mut remaining: usize,
+    eof_message: &str,
+) -> Result<(), NanoGetError> {
+    let mut chunk = [0u8; READ_CHUNK_SIZE];
+    while remaining > 0 {
+        let to_read = remaining.min(chunk.len());
+        match reader.read(&mut chunk[..to_read]) {
+            Ok(0) => {
+                return Err(NanoGetError::IncompleteMessage(eof_message.to_string()));
+            }
+            Ok(read) => {
+                body.extend_from_slice(&chunk[..read]);
+                remaining -= read;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Err(NanoGetError::IncompleteMessage(eof_message.to_string()));
+            }
+            Err(error) => return Err(NanoGetError::Io(error)),
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn should_close_connection(
@@ -487,6 +562,7 @@ pub(crate) fn parse_response_bytes(bytes: &[u8], method: Method) -> Result<Respo
 #[cfg(test)]
 mod tests {
     use std::io::{self, BufRead, BufReader, Cursor, Read};
+    use std::panic::{self, AssertUnwindSafe};
 
     use super::{
         parse_response_bytes, read_chunked_body, read_content_length_body, read_parsed_response,
@@ -779,11 +855,11 @@ mod tests {
     fn response_head_maps_status_and_header_read_io_errors() {
         let mut empty = BufReader::new(&b""[..]);
         let error = read_response_head(&mut empty, true).unwrap_err();
-        assert!(matches!(error, NanoGetError::MalformedStatusLine(_)));
+        assert!(matches!(error, NanoGetError::IncompleteMessage(_)));
 
         let mut truncated = BufReader::new(&b"HTTP/1.1 200 OK\r\nX-Test: 1\r\n"[..]);
         let error = read_response_head(&mut truncated, true).unwrap_err();
-        assert!(matches!(error, NanoGetError::MalformedHeader(_)));
+        assert!(matches!(error, NanoGetError::IncompleteMessage(_)));
 
         let mut invalid_status = BufReader::new(&b"\xff\r\n\r\n"[..]);
         let error = read_response_head(&mut invalid_status, true).unwrap_err();
@@ -836,6 +912,33 @@ mod tests {
         }
 
         fn consume(&mut self, _amt: usize) {}
+    }
+
+    struct DeterministicRng {
+        state: u64,
+    }
+
+    impl DeterministicRng {
+        fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        fn next_u32(&mut self) -> u32 {
+            self.state = self
+                .state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            (self.state >> 32) as u32
+        }
+
+        fn next_bytes(&mut self, max_len: usize) -> Vec<u8> {
+            let len = (self.next_u32() as usize) % (max_len + 1);
+            let mut bytes = Vec::with_capacity(len);
+            for _ in 0..len {
+                bytes.push((self.next_u32() & 0xff) as u8);
+            }
+            bytes
+        }
     }
 
     #[test]
@@ -895,5 +998,71 @@ mod tests {
         let mut invalid_utf8_chunk = BufReader::new(&b"\xff\n"[..]);
         let error = read_chunked_body(&mut invalid_utf8_chunk, false).unwrap_err();
         assert!(matches!(error, NanoGetError::MalformedHeader(_)));
+    }
+
+    #[test]
+    fn rejects_excessive_header_count() {
+        let mut wire = String::from("HTTP/1.1 200 OK\r\n");
+        for index in 0..(super::MAX_HEADER_COUNT + 1) {
+            wire.push_str(&format!("X-{index}: v\r\n"));
+        }
+        wire.push_str("Content-Length: 0\r\n\r\n");
+        let error = parse_response_bytes(wire.as_bytes(), Method::Get).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedHeader(_)));
+    }
+
+    #[test]
+    fn rejects_overly_long_lines() {
+        let long_value = "a".repeat(super::MAX_LINE_BYTES + 1);
+        let wire = format!("HTTP/1.1 200 OK\r\nX-Test: {long_value}\r\n\r\n");
+        let error = parse_response_bytes(wire.as_bytes(), Method::Get).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedHeader(_)));
+    }
+
+    #[test]
+    fn content_length_body_reader_handles_huge_lengths_without_preallocation() {
+        let mut empty = io::empty();
+        let error = read_content_length_body(&mut empty, usize::MAX).unwrap_err();
+        assert!(matches!(error, NanoGetError::IncompleteMessage(_)));
+    }
+
+    #[test]
+    fn deterministic_response_parser_fuzz_harness_is_panic_free() {
+        let corpus: &[&[u8]] = &[
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+            b"HTTP/1.1 204 No Content\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nok",
+            b"HTP/1.1 200 OK\r\n\r\n",
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n",
+            b"",
+            b"HTTP/1.1 200 OK\r\nContent-Length: 999999999999999999999\r\n\r\n",
+        ];
+
+        for seed in corpus {
+            let run = panic::catch_unwind(AssertUnwindSafe(|| {
+                let _ = parse_response_bytes(seed, Method::Get);
+            }));
+            assert!(run.is_ok(), "parser panicked on corpus input");
+        }
+
+        let mut rng = DeterministicRng::new(0xC0FFEE_F00DBAAD);
+        for _ in 0..3_000 {
+            let mut bytes = rng.next_bytes(512);
+            if !bytes.is_empty() && (rng.next_u32() & 1) == 0 {
+                let idx = (rng.next_u32() as usize) % bytes.len();
+                bytes[idx] = bytes[idx].wrapping_add(1);
+            }
+            let method = if (rng.next_u32() & 1) == 0 {
+                Method::Get
+            } else {
+                Method::Head
+            };
+            let run = panic::catch_unwind(AssertUnwindSafe(|| {
+                let _ = parse_response_bytes(&bytes, method);
+            }));
+            assert!(run.is_ok(), "parser panicked for fuzz case");
+        }
     }
 }

@@ -225,6 +225,20 @@ fn main() -> Result<(), nano_get::NanoGetError> {
 Origin `Authorization` headers are preserved only for same-scheme, same-host, same-port redirects.
 `Proxy-Authorization` is scoped to the configured proxy and is never forwarded to the origin.
 
+## Migration Notes
+
+- Redirect `Location` values with a `scheme:` prefix are now interpreted as absolute URI
+  references. Unsupported schemes (for example `foo:bar` or `ftp:...`) now fail with
+  `NanoGetError::UnsupportedScheme` instead of being treated as relative paths.
+- Response parsing now enforces defensive bounds (maximum line length and maximum header count).
+  Oversized status/header lines or excessive header blocks are rejected as malformed.
+- Pipelining replay logic now retries unanswered safe requests after abrupt peer disconnects even
+  when `Connection: close` was not explicitly signaled.
+- Reused keep-alive connections now retry once on EOF-shaped read failures (stale socket closes)
+  before surfacing an error.
+- If a server violates `HEAD` semantics by sending body bytes, the connection is now retired
+  before reuse to prevent response-stream desynchronization.
+
 ## Strict Header Rules
 
 `nano-get` owns the wire-level headers that are required for RFC-correct request framing and proxy

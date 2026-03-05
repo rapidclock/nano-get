@@ -68,8 +68,11 @@ impl Url {
             ));
         }
 
-        if has_uri_scheme_prefix(trimmed) {
-            return Self::parse(trimmed);
+        if let Some(scheme) = uri_scheme_prefix(trimmed) {
+            if matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+                return Self::parse(trimmed);
+            }
+            return Err(NanoGetError::UnsupportedScheme(scheme.to_ascii_lowercase()));
         }
 
         if trimmed.starts_with("//") {
@@ -336,23 +339,24 @@ fn default_port_for_scheme(scheme: &str) -> Option<u16> {
     }
 }
 
-fn has_uri_scheme_prefix(value: &str) -> bool {
-    let Some((scheme, _rest)) = value.split_once("://") else {
-        return false;
-    };
-    is_valid_uri_scheme(scheme)
-}
-
-fn is_valid_uri_scheme(scheme: &str) -> bool {
-    let mut bytes = scheme.bytes();
-    let Some(first) = bytes.next() else {
-        return false;
-    };
+fn uri_scheme_prefix(value: &str) -> Option<&str> {
+    let first = value.as_bytes().first().copied()?;
     if !first.is_ascii_alphabetic() {
-        return false;
+        return None;
     }
 
-    bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+    for (index, byte) in value.bytes().enumerate().skip(1) {
+        if byte == b':' {
+            return Some(&value[..index]);
+        }
+        if matches!(byte, b'/' | b'?' | b'#') {
+            return None;
+        }
+        if !byte.is_ascii_alphanumeric() && !matches!(byte, b'+' | b'-' | b'.') {
+            return None;
+        }
+    }
+    None
 }
 
 fn format_host_for_authority(host: &str) -> String {
@@ -497,6 +501,8 @@ fn pop_last_path_segment(path: &mut String) {
 
 #[cfg(test)]
 mod tests {
+    use std::panic::{self, AssertUnwindSafe};
+
     use super::{
         default_port_for_scheme, normalize_path, parse_target, split_authority_and_target, ToUrl,
         Url,
@@ -581,6 +587,19 @@ mod tests {
 
         let error = base.resolve("ftp://example.com").unwrap_err();
         assert!(matches!(error, NanoGetError::UnsupportedScheme(_)));
+    }
+
+    #[test]
+    fn resolve_treats_scheme_colon_prefix_as_absolute_uri_reference() {
+        let base = Url::parse("http://example.com/base").unwrap();
+        let error = base.resolve("foo:bar").unwrap_err();
+        assert!(matches!(
+            error,
+            NanoGetError::UnsupportedScheme(ref scheme) if scheme == "foo"
+        ));
+
+        let relative = base.resolve("./foo:bar").unwrap();
+        assert_eq!(relative.full_url(), "http://example.com/foo:bar");
     }
 
     #[test]
@@ -727,5 +746,79 @@ mod tests {
         let base = Url::parse("http://example.com/path").unwrap();
         let error = base.resolve("   ").unwrap_err();
         assert!(matches!(error, NanoGetError::InvalidUrl(_)));
+    }
+
+    struct DeterministicRng {
+        state: u64,
+    }
+
+    impl DeterministicRng {
+        fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        fn next_u32(&mut self) -> u32 {
+            self.state = self
+                .state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            (self.state >> 32) as u32
+        }
+
+        fn next_location(&mut self, max_len: usize) -> String {
+            const ASCII: &[u8] =
+                b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~:/?#[]@!$&'()*+,;=%";
+            let len = (self.next_u32() as usize) % (max_len + 1);
+            let mut out = String::with_capacity(len);
+            for _ in 0..len {
+                let roll = self.next_u32() % 29;
+                if roll == 0 {
+                    out.push('\u{00e9}');
+                } else if roll == 1 {
+                    out.push('\u{2603}');
+                } else {
+                    let idx = (self.next_u32() as usize) % ASCII.len();
+                    out.push(ASCII[idx] as char);
+                }
+            }
+            out
+        }
+    }
+
+    #[test]
+    fn deterministic_url_parse_and_resolve_fuzz_harness_is_panic_free() {
+        let base = Url::parse("http://example.com/a/b/index.html?x=1").unwrap();
+        let corpus = [
+            "",
+            "http://example.com/path",
+            "https://example.com:8443/path?q=1",
+            "/foo://bar",
+            "foo:bar",
+            "//cdn.example.com/resource",
+            "?query=1",
+            "/caf\u{00e9}",
+            "http://[::1]/",
+            "http://[:::1]/",
+            "http://user@example.com",
+            "http://example.com/hello world",
+        ];
+
+        for input in corpus {
+            let run = panic::catch_unwind(AssertUnwindSafe(|| {
+                let _ = Url::parse(input);
+                let _ = base.resolve(input);
+            }));
+            assert!(run.is_ok(), "URL parsing panicked for corpus input");
+        }
+
+        let mut rng = DeterministicRng::new(0x1234_5678_ABCD_EF01);
+        for _ in 0..3_000 {
+            let input = rng.next_location(128);
+            let run = panic::catch_unwind(AssertUnwindSafe(|| {
+                let _ = Url::parse(&input);
+                let _ = base.resolve(&input);
+            }));
+            assert!(run.is_ok(), "URL parsing panicked for fuzz input");
+        }
     }
 }

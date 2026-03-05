@@ -126,6 +126,7 @@ fn estimate_connect_capacity(target_authority: &str, headers: &[Header]) -> usiz
 #[cfg(test)]
 mod tests {
     use std::io::{BufReader, Cursor, Read, Write};
+    use std::panic::{self, AssertUnwindSafe};
 
     use super::{write_connect_request, write_request};
     use crate::request::{Method, Request};
@@ -318,5 +319,93 @@ mod tests {
         write_request(&mut stream, &request, "/path", false).unwrap();
         stream.flush().unwrap();
         assert!(!stream.writes.is_empty());
+    }
+
+    struct DeterministicRng {
+        state: u64,
+    }
+
+    impl DeterministicRng {
+        fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        fn next_u32(&mut self) -> u32 {
+            self.state = self
+                .state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            (self.state >> 32) as u32
+        }
+
+        fn next_ascii_token(&mut self, max_len: usize) -> String {
+            const CHARSET: &[u8] =
+                b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+            let len = ((self.next_u32() as usize) % max_len.max(1)) + 1;
+            let mut out = String::with_capacity(len);
+            for _ in 0..len {
+                let idx = (self.next_u32() as usize) % CHARSET.len();
+                out.push(CHARSET[idx] as char);
+            }
+            out
+        }
+
+        fn next_header_value(&mut self, max_len: usize) -> String {
+            const CHARSET: &[u8] =
+                b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 _-./;=:+";
+            let len = (self.next_u32() as usize) % (max_len + 1);
+            let mut out = String::with_capacity(len);
+            for _ in 0..len {
+                let idx = (self.next_u32() as usize) % CHARSET.len();
+                out.push(CHARSET[idx] as char);
+            }
+            out
+        }
+    }
+
+    #[test]
+    fn deterministic_request_serialization_fuzz_harness_is_panic_free() {
+        let mut rng = DeterministicRng::new(0xBAD5EED_F00DCAFE);
+        for case in 0..3_000 {
+            let host = format!("fuzz{}{}.example.com", case % 97, rng.next_u32() % 17);
+            let path = format!("/{}", rng.next_ascii_token(24));
+            let query = if (rng.next_u32() & 1) == 0 {
+                format!("?k={}", rng.next_ascii_token(8))
+            } else {
+                String::new()
+            };
+            let url = format!("http://{host}{path}{query}");
+            let mut request = if (rng.next_u32() & 1) == 0 {
+                Request::get(&url).unwrap()
+            } else {
+                Request::head(&url).unwrap()
+            };
+
+            for header_idx in 0..((rng.next_u32() as usize) % 4) {
+                let name = format!("X-Fuzz-{case}-{header_idx}");
+                let value = rng.next_header_value(32);
+                request.add_header(name, value).unwrap();
+            }
+
+            let target = if (rng.next_u32() & 1) == 0 {
+                request.url().origin_form()
+            } else {
+                request.url().absolute_form()
+            };
+            let close = (rng.next_u32() & 1) == 0;
+            let mut bytes = Vec::new();
+            let run = panic::catch_unwind(AssertUnwindSafe(|| {
+                write_request(&mut bytes, &request, &target, close).unwrap();
+            }));
+            assert!(run.is_ok(), "write_request panicked");
+            assert!(bytes.ends_with(b"\r\n\r\n"));
+        }
+
+        let mut bytes = Vec::new();
+        let run = panic::catch_unwind(AssertUnwindSafe(|| {
+            write_connect_request(&mut bytes, "example.com:443", &[], false).unwrap();
+        }));
+        assert!(run.is_ok(), "write_connect_request panicked");
+        assert!(bytes.starts_with(b"CONNECT example.com:443 HTTP/1.1\r\n"));
     }
 }
