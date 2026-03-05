@@ -1,13 +1,17 @@
 mod support;
 
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread;
+
 use nano_get::{
     get, get_bytes, head, CacheMode, Client, ConnectionPolicy, ParserStrictness, ProxyConfig,
     RedirectPolicy, Request,
 };
 
-use support::{
-    spawn_http_server, spawn_persistent_http_server, spawn_scripted_http_server, Interaction,
-};
+use support::{spawn_http_server, spawn_persistent_http_server};
 
 #[test]
 fn get_returns_text_body() {
@@ -666,12 +670,58 @@ fn if_range_mismatch_with_only_if_cached_returns_504() {
 
 #[test]
 fn pipelining_retries_unanswered_requests_after_premature_close() {
-    let server = spawn_scripted_http_server(vec![
-        Interaction::Persistent(vec![
-            b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nfirst".to_vec(),
-        ]),
-        Interaction::Once(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond".to_vec()),
-    ]);
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let connection_count = Arc::new(AtomicUsize::new(0));
+    let connection_count_for_thread = Arc::clone(&connection_count);
+    let handle = thread::spawn(move || {
+        let (mut first_stream, _) = listener.accept().unwrap();
+        connection_count_for_thread.fetch_add(1, Ordering::SeqCst);
+
+        let mut first_request_bytes = Vec::new();
+        let mut chunk = [0u8; 512];
+        while first_request_bytes
+            .windows(4)
+            .filter(|window| *window == b"\r\n\r\n")
+            .count()
+            < 2
+        {
+            let read = first_stream.read(&mut chunk).unwrap();
+            assert!(
+                read > 0,
+                "client closed connection before both pipelined requests were sent"
+            );
+            first_request_bytes.extend_from_slice(&chunk[..read]);
+        }
+
+        first_stream
+            .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nfirst")
+            .unwrap();
+        drop(first_stream);
+
+        let (mut second_stream, _) = listener.accept().unwrap();
+        connection_count_for_thread.fetch_add(1, Ordering::SeqCst);
+        let mut second_request_bytes = Vec::new();
+        loop {
+            let read = second_stream.read(&mut chunk).unwrap();
+            assert!(
+                read > 0,
+                "client closed retry connection before sending the unanswered request"
+            );
+            second_request_bytes.extend_from_slice(&chunk[..read]);
+            if second_request_bytes
+                .windows(4)
+                .any(|window| window == b"\r\n\r\n")
+            {
+                break;
+            }
+        }
+        second_stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond")
+            .unwrap();
+    });
+
+    let base_url = format!("http://127.0.0.1:{port}");
 
     let client = Client::builder()
         .connection_policy(ConnectionPolicy::Reuse)
@@ -679,15 +729,15 @@ fn pipelining_retries_unanswered_requests_after_premature_close() {
     let mut session = client.session();
     let responses = session
         .execute_pipelined(&[
-            Request::get(format!("{}/one", server.base_url)).unwrap(),
-            Request::get(format!("{}/two", server.base_url)).unwrap(),
+            Request::get(format!("{}/one", base_url)).unwrap(),
+            Request::get(format!("{}/two", base_url)).unwrap(),
         ])
         .unwrap();
 
     assert_eq!(responses[0].body_text().unwrap(), "first");
     assert_eq!(responses[1].body_text().unwrap(), "second");
-    assert_eq!(*server.connection_count.lock().unwrap(), 2);
-    server.join();
+    assert_eq!(connection_count.load(Ordering::SeqCst), 2);
+    handle.join().unwrap();
 }
 
 #[cfg(not(feature = "https"))]
