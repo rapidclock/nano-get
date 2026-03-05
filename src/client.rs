@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::io::BufReader;
+#[cfg(feature = "https")]
+use std::io::{Cursor, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
@@ -400,7 +402,6 @@ impl Session {
                 let target = request_target(&prepared, &self.config.proxy);
                 http::write_request(connection.reader.get_mut(), &prepared, &target, false)?;
             }
-            use std::io::Write;
             connection.reader.get_mut().flush()?;
         }
 
@@ -598,7 +599,6 @@ impl Session {
             SendTarget::for_request(&self.config, request),
         )?;
         let target = request_target(&prepared, &self.config.proxy);
-        use std::io::Write;
 
         let request_time = SystemTime::now();
         http::write_request(connection.reader.get_mut(), &prepared, &target, true)?;
@@ -629,7 +629,6 @@ impl Session {
                 "missing persistent connection",
             ))
         })?;
-        use std::io::Write;
 
         let request_time = SystemTime::now();
         http::write_request(connection.reader.get_mut(), &prepared, &target, false)?;
@@ -734,6 +733,50 @@ impl Default for ClientConfig {
 struct LiveConnection {
     key: ConnectionKey,
     reader: BufReader<BoxStream>,
+}
+
+#[cfg(feature = "https")]
+struct PrefixedStream<S> {
+    prefix: Cursor<Vec<u8>>,
+    stream: S,
+}
+
+#[cfg(feature = "https")]
+impl<S> PrefixedStream<S> {
+    fn new(stream: S, prefix: Vec<u8>) -> Self {
+        Self {
+            prefix: Cursor::new(prefix),
+            stream,
+        }
+    }
+}
+
+#[cfg(feature = "https")]
+impl<S: Read> Read for PrefixedStream<S> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let mut total = 0usize;
+
+        if (self.prefix.position() as usize) < self.prefix.get_ref().len() {
+            total += self.prefix.read(buf)?;
+            if total == buf.len() {
+                return Ok(total);
+            }
+        }
+
+        let read = self.stream.read(&mut buf[total..])?;
+        Ok(total + read)
+    }
+}
+
+#[cfg(feature = "https")]
+impl<S: Write> Write for PrefixedStream<S> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -908,16 +951,25 @@ fn open_https_tunnel(
         let connect_headers = prepared_connect_headers(&current, config, proxy)?;
         let authority = request.url().authority_form();
         http::write_connect_request(&mut stream, &authority, &connect_headers, false)?;
-        use std::io::Write;
-        stream.flush()?;
-        let head = http::read_response_head(&mut stream, config.parser_strictness.is_strict())?;
+        std::io::Write::flush(&mut stream)?;
+        let mut reader = BufReader::new(stream);
+        let head = http::read_response_head(&mut reader, config.parser_strictness.is_strict())?;
         if (200..=299).contains(&head.status_code) {
+            let prefetched = reader.buffer().to_vec();
+            let stream = reader.into_inner();
             #[cfg(feature = "https")]
             {
-                return https::connect_tls_over_stream(request.url(), stream);
+                if prefetched.is_empty() {
+                    return https::connect_tls_over_stream(request.url(), stream);
+                }
+                return https::connect_tls_over_stream(
+                    request.url(),
+                    PrefixedStream::new(stream, prefetched),
+                );
             }
             #[cfg(not(feature = "https"))]
             {
+                let _ = prefetched;
                 let _ = stream;
                 return Err(NanoGetError::HttpsFeatureRequired);
             }
@@ -2169,6 +2221,16 @@ mod tests {
             request_time: now,
             response_time: now,
         }
+    }
+
+    #[cfg(feature = "https")]
+    #[test]
+    fn prefixed_stream_reads_prefix_before_inner_stream() {
+        let inner = std::io::Cursor::new(b"tail".to_vec());
+        let mut stream = super::PrefixedStream::new(inner, b"head".to_vec());
+        let mut body = Vec::new();
+        stream.read_to_end(&mut body).unwrap();
+        assert_eq!(body, b"headtail");
     }
 
     fn response(status: u16, headers: Vec<crate::Header>, body: &[u8]) -> Response {

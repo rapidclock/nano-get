@@ -1,4 +1,4 @@
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::net::TcpStream;
 
 use crate::errors::NanoGetError;
@@ -15,14 +15,12 @@ pub(crate) fn connect_tcp(address: &str) -> Result<TcpStream, NanoGetError> {
     TcpStream::connect(address).map_err(NanoGetError::Connect)
 }
 
-pub(crate) fn read_response_head<S: Read + Write + ?Sized>(
-    stream: &mut S,
+pub(crate) fn read_response_head<R: BufRead>(
+    reader: &mut R,
     strict: bool,
 ) -> Result<ResponseHead, NanoGetError> {
-    let mut reader = BufReader::new(stream);
-
     loop {
-        let head = response::read_response_head(&mut reader, strict)?;
+        let head = response::read_response_head(reader, strict)?;
         if (100..=199).contains(&head.status_code) && head.status_code != 101 {
             continue;
         }
@@ -127,7 +125,7 @@ fn estimate_connect_capacity(target_authority: &str, headers: &[Header]) -> usiz
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Read, Write};
+    use std::io::{BufReader, Cursor, Read, Write};
 
     use super::{write_connect_request, write_request};
     use crate::request::{Method, Request};
@@ -225,9 +223,20 @@ mod tests {
     fn read_response_head_skips_interim_responses() {
         let bytes =
             b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_vec();
-        let mut stream = InMemoryStream::new(bytes);
-        let head = super::read_response_head(&mut stream, true).unwrap();
+        let stream = InMemoryStream::new(bytes);
+        let mut reader = BufReader::new(stream);
+        let head = super::read_response_head(&mut reader, true).unwrap();
         assert_eq!(head.status_code, 200);
+    }
+
+    #[test]
+    fn read_response_head_preserves_prefetched_bytes_in_reader_buffer() {
+        let bytes = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\nprefetched".to_vec();
+        let stream = InMemoryStream::new(bytes);
+        let mut reader = BufReader::new(stream);
+        let head = super::read_response_head(&mut reader, true).unwrap();
+        assert_eq!(head.status_code, 200);
+        assert_eq!(reader.buffer(), b"prefetched");
     }
 
     #[test]

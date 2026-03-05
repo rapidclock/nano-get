@@ -89,7 +89,8 @@ impl Url {
         }
 
         let (path, query) = if trimmed.starts_with('/') {
-            parse_target(trimmed)?
+            let (path, query) = parse_target(trimmed)?;
+            (normalize_path(&path), query)
         } else {
             let (relative_path, query) = split_path_and_query(trimmed);
             validate_target_component(relative_path, "path")?;
@@ -317,7 +318,7 @@ fn parse_target(target: &str) -> Result<(String, Option<String>), NanoGetError> 
     if let Some(query) = query {
         validate_target_component(query, "query")?;
     }
-    Ok((normalize_path(path), query.map(|value| value.to_string())))
+    Ok((path.to_string(), query.map(|value| value.to_string())))
 }
 
 fn split_path_and_query(input: &str) -> (&str, Option<&str>) {
@@ -382,10 +383,7 @@ fn validate_ipv6_literal(host: &str) -> Result<(), NanoGetError> {
         return Err(NanoGetError::invalid_url("unterminated IPv6 host"));
     }
 
-    if host
-        .chars()
-        .all(|ch| ch.is_ascii_hexdigit() || ch == ':' || ch == '.')
-    {
+    if host.parse::<std::net::Ipv6Addr>().is_ok() {
         return Ok(());
     }
 
@@ -405,27 +403,71 @@ fn validate_target_component(value: &str, component: &str) -> Result<(), NanoGet
 }
 
 fn normalize_path(path: &str) -> String {
-    let preserve_trailing_slash = path.ends_with('/') && path.len() > 1;
-    let mut parts = Vec::new();
+    let mut input = path.to_string();
+    let mut output = String::new();
 
-    for segment in path.split('/') {
-        match segment {
-            "" | "." => continue,
-            ".." => {
-                parts.pop();
-            }
-            value => parts.push(value),
+    while !input.is_empty() {
+        if input.starts_with("../") {
+            input.drain(..3);
+            continue;
         }
+        if input.starts_with("./") {
+            input.drain(..2);
+            continue;
+        }
+        if input.starts_with("/./") {
+            input.replace_range(..3, "/");
+            continue;
+        }
+        if input == "/." {
+            input.replace_range(..2, "/");
+            continue;
+        }
+        if input.starts_with("/../") {
+            input.replace_range(..4, "/");
+            pop_last_path_segment(&mut output);
+            continue;
+        }
+        if input == "/.." {
+            input.replace_range(..3, "/");
+            pop_last_path_segment(&mut output);
+            continue;
+        }
+        if input == "." || input == ".." {
+            input.clear();
+            continue;
+        }
+
+        let segment_end = if input.starts_with('/') {
+            match input[1..].find('/') {
+                Some(index) => index + 1,
+                None => input.len(),
+            }
+        } else {
+            input.find('/').unwrap_or(input.len())
+        };
+        output.push_str(&input[..segment_end]);
+        input.drain(..segment_end);
     }
 
-    let mut normalized = String::from("/");
-    normalized.push_str(&parts.join("/"));
+    if output.is_empty() && path.starts_with('/') {
+        "/".to_string()
+    } else {
+        output
+    }
+}
 
-    if preserve_trailing_slash && normalized != "/" {
-        normalized.push('/');
+fn pop_last_path_segment(path: &mut String) {
+    if path.is_empty() {
+        return;
     }
 
-    normalized
+    let candidate = path.strip_suffix('/').unwrap_or(path.as_str());
+    if let Some(index) = candidate.rfind('/') {
+        path.truncate(index);
+    } else {
+        path.clear();
+    }
 }
 
 #[cfg(test)]
@@ -472,10 +514,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_preserves_user_path_structure() {
+        let url = Url::parse("http://example.com/a//b/./c/../d").unwrap();
+        assert_eq!(url.path, "/a//b/./c/../d");
+        assert_eq!(url.origin_form(), "/a//b/./c/../d");
+    }
+
+    #[test]
     fn resolves_relative_redirects() {
         let base = Url::parse("http://example.com/a/b/index.html?x=1").unwrap();
         let resolved = base.resolve("../next?y=2").unwrap();
         assert_eq!(resolved.full_url(), "http://example.com/a/next?y=2");
+    }
+
+    #[test]
+    fn resolves_relative_redirects_with_dot_segments_without_collapsing_double_slashes() {
+        let base = Url::parse("http://example.com/a/b/index.html").unwrap();
+        let resolved = base.resolve("../x//y/./z/..").unwrap();
+        assert_eq!(resolved.full_url(), "http://example.com/a/x//y/");
     }
 
     #[test]
@@ -521,6 +577,10 @@ mod tests {
         ));
         assert!(matches!(
             Url::parse("http://[::1]bad"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            Url::parse("http://[:::1]/"),
             Err(NanoGetError::InvalidUrl(_))
         ));
     }
@@ -613,6 +673,7 @@ mod tests {
         assert_eq!(super::base_directory("/a"), "/");
         assert_eq!(super::base_directory("a"), "/");
         assert_eq!(normalize_path("/a/b/"), "/a/b/");
+        assert_eq!(normalize_path("/a//b/./c/../"), "/a//b/");
 
         let base = Url::parse("http://example.com/path").unwrap();
         let error = base.resolve("   ").unwrap_err();
