@@ -254,9 +254,15 @@ fn parse_status_line(line: &str) -> Result<(HttpVersion, u16, String), NanoGetEr
         _ => return Err(NanoGetError::MalformedStatusLine(line.to_string())),
     };
 
-    let status_code = parts
+    let status_code_token = parts
         .next()
-        .ok_or_else(|| NanoGetError::MalformedStatusLine(line.to_string()))?
+        .ok_or_else(|| NanoGetError::MalformedStatusLine(line.to_string()))?;
+    if status_code_token.len() != 3 || !status_code_token.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(NanoGetError::MalformedStatusLine(line.to_string()));
+    }
+
+    let status_code = status_code_token
         .parse::<u16>()
         .map_err(|_| NanoGetError::MalformedStatusLine(line.to_string()))?;
 
@@ -327,24 +333,33 @@ pub(crate) fn content_length(headers: &[Header]) -> Result<Option<usize>, NanoGe
         .filter(|header| header.matches_name("content-length"))
         .flat_map(|header| header.value().split(','))
         .map(str::trim)
-        .filter(|value| !value.is_empty());
+        .filter(|value| !value.is_empty())
+        .map(parse_content_length_value);
 
     let Some(first) = values.next() else {
         return Ok(None);
     };
+    let first = first?;
 
     for value in values {
-        if value != first {
+        if value? != first {
             return Err(NanoGetError::InvalidContentLength(
                 "mismatched duplicate content-length headers".to_string(),
             ));
         }
     }
 
-    let parsed = first
+    Ok(Some(first))
+}
+
+fn parse_content_length_value(value: &str) -> Result<usize, NanoGetError> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(NanoGetError::InvalidContentLength(value.to_string()));
+    }
+
+    value
         .parse::<usize>()
-        .map_err(|_| NanoGetError::InvalidContentLength(first.to_string()))?;
-    Ok(Some(parsed))
+        .map_err(|_| NanoGetError::InvalidContentLength(value.to_string()))
 }
 
 fn read_content_length_body<R: Read>(
@@ -485,6 +500,12 @@ mod tests {
     fn rejects_invalid_status_lines() {
         let error = parse_response_bytes(b"HTP/1.1 200 OK\r\n\r\n", Method::Get).unwrap_err();
         assert!(matches!(error, NanoGetError::MalformedStatusLine(_)));
+
+        let error = parse_response_bytes(b"HTTP/1.1 20 OK\r\n\r\n", Method::Get).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedStatusLine(_)));
+
+        let error = parse_response_bytes(b"HTTP/1.1 2000 OK\r\n\r\n", Method::Get).unwrap_err();
+        assert!(matches!(error, NanoGetError::MalformedStatusLine(_)));
     }
 
     #[test]
@@ -504,6 +525,26 @@ mod tests {
     fn rejects_mismatched_duplicate_content_lengths() {
         let error = parse_response_bytes(
             b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\nhello!",
+            Method::Get,
+        )
+        .unwrap_err();
+        assert!(matches!(error, NanoGetError::InvalidContentLength(_)));
+    }
+
+    #[test]
+    fn accepts_duplicate_content_lengths_with_equal_numeric_values() {
+        let response = parse_response_bytes(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 05\r\nContent-Length: 5\r\n\r\nhello",
+            Method::Get,
+        )
+        .unwrap();
+        assert_eq!(response.body, b"hello");
+    }
+
+    #[test]
+    fn rejects_non_numeric_content_lengths() {
+        let error = parse_response_bytes(
+            b"HTTP/1.1 200 OK\r\nContent-Length: +5\r\n\r\nhello",
             Method::Get,
         )
         .unwrap_err();
