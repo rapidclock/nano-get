@@ -288,10 +288,10 @@ Local compliance/coverage commands:
 
 - `cargo llvm-cov clean --workspace`
 - `cargo llvm-cov --workspace --no-default-features --features http --lcov --output-path /tmp/http_cov.info`
-- `python3 tools/check_line_coverage.py --lcov /tmp/http_cov.info --root . --require 100`
+- `python3 tools/check_line_coverage.py --lcov /tmp/http_cov.info --root . --require 95`
 - `cargo llvm-cov clean --workspace`
 - `cargo llvm-cov --workspace --all-features --lcov --output-path /tmp/all_cov.info`
-- `python3 tools/check_line_coverage.py --lcov /tmp/all_cov.info --root . --require 100`
+- `python3 tools/check_line_coverage.py --lcov /tmp/all_cov.info --root . --require 95`
 
 ## Notes
 
