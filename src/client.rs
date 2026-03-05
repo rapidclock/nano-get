@@ -2720,13 +2720,11 @@ mod tests {
             let mut chunk = [0u8; 256];
             loop {
                 let read = stream.read(&mut chunk).unwrap();
-                if read == 0 {
-                    break;
-                }
+                assert!(read > 0, "client closed before sending two requests");
                 request.extend_from_slice(&chunk[..read]);
                 if request
-                    .windows(8)
-                    .filter(|window| *window == b"HTTP/1.1")
+                    .windows(4)
+                    .filter(|window| *window == b"\r\n\r\n")
                     .count()
                     >= 2
                 {
@@ -3932,8 +3930,16 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buffer = [0u8; 1024];
-            let _ = stream.read(&mut buffer).unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 256];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                assert!(read > 0, "client closed before sending CONNECT request");
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
             stream
                 .write_all(b"HTTP/1.1 200 Connection Established\r\nContent-Length: 0\r\n\r\n")
                 .unwrap();
@@ -3956,8 +3962,16 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buffer = [0u8; 1024];
-            let _ = stream.read(&mut buffer).unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 256];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                assert!(read > 0, "client closed before sending CONNECT request");
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
             stream
                 .write_all(
                     b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\nContent-Length: 0\r\n\r\n",
@@ -3984,8 +3998,16 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buffer = [0u8; 1024];
-            let _ = stream.read(&mut buffer).unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 256];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                assert!(read > 0, "client closed before sending CONNECT request");
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
             stream
                 .write_all(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
                 .unwrap();
@@ -4010,8 +4032,16 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
-            let mut buffer = [0u8; 1024];
-            let _ = stream.read(&mut buffer).unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 256];
+            loop {
+                let read = stream.read(&mut chunk).unwrap();
+                assert!(read > 0, "client closed before sending CONNECT request");
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
             stream
                 .write_all(
                     b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"proxy\"\r\nContent-Length: 0\r\n\r\n",
