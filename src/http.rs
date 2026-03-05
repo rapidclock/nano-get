@@ -1,75 +1,153 @@
-//! This module provides the main HTTP Get method.
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::TcpStream;
 
-use super::errors::NanoGetError;
-use super::Request;
-use super::response::{new_response_from_complete, Response};
-use super::ToUrl;
+use crate::errors::NanoGetError;
+use crate::request::{Header, Request};
+use crate::response::{self, ResponseHead};
 
-/// The basic implementation of the HTTP GET method.
-///
-/// This can be called on anything that implements the ToUrl Trait.
-///
-/// This library provides implementation of the ToUrl trait for String, &str, URL and &URL.
-///
-/// This function returns the response body as a String.
-pub fn get_http<A: ToUrl>(url: A) -> String {
-    let request = Request::default_get_request(url).expect("Url couldn't be formed!");
-    request_http_get(&request).unwrap().body
+pub(crate) trait HttpStream: Read + Write + Send {}
+
+impl<T: Read + Write + Send> HttpStream for T {}
+
+pub(crate) type BoxStream = Box<dyn HttpStream>;
+
+pub(crate) fn connect_tcp(address: &str) -> Result<TcpStream, NanoGetError> {
+    TcpStream::connect(address).map_err(NanoGetError::Connect)
 }
 
-pub fn request_http_get(request: &Request) -> Result<Response, NanoGetError> {
-    let mut stream = TcpStream::connect(request.url.get_host_with_port()).unwrap();
-    execute(&mut stream, &request)
-}
+pub(crate) fn read_response_head<S: Read + Write + ?Sized>(
+    stream: &mut S,
+) -> Result<ResponseHead, NanoGetError> {
+    let mut reader = BufReader::new(stream);
 
-pub fn execute<S: Read + Write>(mut stream: S, request: &Request) -> Result<Response, NanoGetError> {
-    send_request(&mut stream, &request).unwrap();
-    receive_response(&mut stream)
-}
+    loop {
+        let head = response::read_response_head(&mut reader)?;
+        if (100..=199).contains(&head.status_code) && head.status_code != 101 {
+            continue;
+        }
 
-pub fn send_request(stream: &mut dyn Write, request: &Request) -> std::io::Result<()> {
-    write_http_method(stream, request)?;
-    write_std_headers(stream, request)?;
-    if request.body.is_some() {
-        return write_request_body(stream, request);
+        return Ok(head);
     }
-    Ok(())
 }
 
-fn write_http_method(stream: &mut dyn Write, request: &Request) -> std::io::Result<()> {
-    stream.write_fmt(format_args!("{method} {path} HTTP/1.1\r\n",
-                                  method = request.get_request_type(),
-                                  path = request.url.path))?;
-    Ok(())
-}
+pub(crate) fn write_request<W: Write + ?Sized>(
+    writer: &mut W,
+    request: &Request,
+    target: &str,
+    connection_close: bool,
+) -> Result<(), NanoGetError> {
+    write!(
+        writer,
+        "{} {} HTTP/1.1\r\n",
+        request.method().as_str(),
+        target
+    )?;
 
-fn write_std_headers(stream: &mut dyn Write, request: &Request) -> std::io::Result<()> {
-    for (k, v) in request.get_request_headers() {
-        writeln!(stream, "{}: {}\r", k, v)?;
+    for default_header in request.default_headers_for(connection_close) {
+        if !request.has_header(default_header.name()) {
+            write_header(writer, &default_header)?;
+        }
     }
-    stream.write_all(b"\r\n")?;
+
+    for header in request.headers() {
+        write_header(writer, header)?;
+    }
+
+    writer.write_all(b"\r\n")?;
     Ok(())
 }
 
-fn write_request_body(stream: &mut dyn Write, request: &Request) -> std::io::Result<()> {
-    write!(stream, "{}", request.body.as_ref().unwrap())
+pub(crate) fn write_connect_request<W: Write + ?Sized>(
+    writer: &mut W,
+    target_authority: &str,
+    headers: &[Header],
+    connection_close: bool,
+) -> Result<(), NanoGetError> {
+    write!(writer, "CONNECT {target_authority} HTTP/1.1\r\n")?;
+    write!(writer, "Host: {target_authority}\r\n")?;
+    write!(
+        writer,
+        "Connection: {}\r\n",
+        if connection_close {
+            "close"
+        } else {
+            "keep-alive"
+        }
+    )?;
+
+    for header in headers {
+        write_header(writer, header)?;
+    }
+
+    writer.write_all(b"\r\n")?;
+    Ok(())
 }
 
-pub fn receive_response(stream: &mut dyn Read) -> Result<Response, NanoGetError> {
-    let response_vec = read_response(stream).unwrap();
-    let response_str = String::from_utf8_lossy(&response_vec);
-    let response = parse_body_from_response(&response_str);
-    Ok(response)
+fn write_header<W: Write + ?Sized>(writer: &mut W, header: &Header) -> Result<(), NanoGetError> {
+    write!(writer, "{}: {}\r\n", header.name(), header.value())?;
+    Ok(())
 }
 
-fn read_response(stream: &mut dyn Read) -> std::io::Result<Vec<u8>> {
-    let mut lines: Vec<u8> = Vec::with_capacity(2048);
-    stream.read_to_end(&mut lines)?;
-    Ok(lines)
-}
+#[cfg(test)]
+mod tests {
+    use super::{write_connect_request, write_request};
+    use crate::request::{Method, Request};
 
-fn parse_body_from_response(response: &str) -> Response {
-    new_response_from_complete(response.to_string())
+    #[test]
+    fn serializes_get_requests() {
+        let mut request = Request::get("http://example.com/path?x=1").unwrap();
+        request.add_header("X-Test", "123").unwrap();
+
+        let mut bytes = Vec::new();
+        write_request(&mut bytes, &request, &request.url().origin_form(), true).unwrap();
+
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.starts_with("GET /path?x=1 HTTP/1.1\r\n"));
+        assert!(text.contains("Host: example.com\r\n"));
+        assert!(text.contains("User-Agent: nano-get/0.3.0\r\n"));
+        assert!(text.contains("X-Test: 123\r\n"));
+        assert!(text.contains("Connection: close\r\n"));
+        assert!(text.ends_with("\r\n\r\n"));
+    }
+
+    #[test]
+    fn serializes_head_requests() {
+        let request = Request::head("http://example.com").unwrap();
+        let mut bytes = Vec::new();
+        write_request(&mut bytes, &request, &request.url().origin_form(), true).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.starts_with("HEAD / HTTP/1.1\r\n"));
+        assert!(!matches!(request.method(), Method::Get));
+    }
+
+    #[test]
+    fn managed_headers_cannot_be_overridden() {
+        let error = Request::get("http://example.com")
+            .unwrap()
+            .add_header("Host", "override.test")
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            crate::errors::NanoGetError::ProtocolManagedHeader(_)
+        ));
+    }
+
+    #[test]
+    fn serializes_absolute_form_targets() {
+        let request = Request::get("http://example.com/path").unwrap();
+        let mut bytes = Vec::new();
+        write_request(&mut bytes, &request, &request.url().absolute_form(), false).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.starts_with("GET http://example.com/path HTTP/1.1\r\n"));
+        assert!(text.contains("Connection: keep-alive\r\n"));
+    }
+
+    #[test]
+    fn serializes_connect_requests() {
+        let mut bytes = Vec::new();
+        write_connect_request(&mut bytes, "example.com:443", &[], false).unwrap();
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(text.starts_with("CONNECT example.com:443 HTTP/1.1\r\n"));
+        assert!(text.contains("Host: example.com:443\r\n"));
+    }
 }

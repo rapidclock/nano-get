@@ -1,0 +1,103 @@
+name: Checker
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install stable
+        run: rustup toolchain install stable --profile minimal --component rustfmt
+
+      - name: Check formatting
+        run: cargo +stable fmt --all -- --check
+
+  clippy-http:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install stable
+        run: rustup toolchain install stable --profile minimal --component clippy
+
+      - name: Lint HTTP-only build
+        run: cargo +stable clippy --workspace --all-targets --no-default-features --features http -- -D warnings
+
+  clippy-all-features:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install stable
+        run: rustup toolchain install stable --profile minimal --component clippy
+
+      - name: Lint all features
+        run: cargo +stable clippy --workspace --all-targets --all-features -- -D warnings
+
+  test-http:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - "1.71.0"
+          - stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+
+      - name: Resolve HTTP-only dependency graph
+        run: |
+          rm -f Cargo.lock
+          cargo +${{ matrix.toolchain }} test --workspace --no-default-features --features http --no-run
+
+      - name: Test HTTP-only build with locked dependencies
+        run: cargo +${{ matrix.toolchain }} test --workspace --no-default-features --features http --locked
+
+  test-all-features:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain:
+          - "1.71.0"
+          - stable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install OpenSSL headers
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install Rust
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+
+      - name: Resolve all-features dependency graph
+        run: |
+          rm -f Cargo.lock
+          cargo +${{ matrix.toolchain }} test --workspace --all-features --no-run
+
+      - name: Test all features with locked dependencies
+        run: cargo +${{ matrix.toolchain }} test --workspace --all-features --locked
