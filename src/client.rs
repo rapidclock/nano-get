@@ -455,7 +455,7 @@ impl Session {
                 .lookup_range(&request, now, &auth_context);
             match range_lookup {
                 Some(RangeCacheLookup::Hit(response)) => {
-                    return Ok(response_for_method(&response, request.method()))
+                    return Ok(response_for_method(response, request.method()))
                 }
                 Some(RangeCacheLookup::UnsatisfiedOnlyIfCached) => {
                     return Ok(gateway_timeout_response())
@@ -481,11 +481,8 @@ impl Session {
         };
 
         match cache_lookup {
-            Some(CacheLookup::Fresh(entry)) => {
-                return Ok(response_for_method(
-                    &entry.response_with_age(now),
-                    request.method(),
-                ))
+            Some(CacheLookup::Fresh(response)) => {
+                return Ok(response_for_method(response, request.method()))
             }
             Some(CacheLookup::Stale(entry)) => {
                 let revalidation = self.execute_stale(request, *entry)?;
@@ -554,7 +551,7 @@ impl Session {
                     .map_err(|_| NanoGetError::Cache("cache lock poisoned".to_string()))?;
                 cache.merge_not_modified(&request, &entry, &response, SystemTime::now())?
             };
-            return Ok(response_for_method(&merged, request.method()));
+            return Ok(response_for_method(merged, request.method()));
         }
 
         let timed_response = TimedResponse::synthetic(response.clone());
@@ -983,7 +980,6 @@ impl MemoryCache {
             .iter()
             .filter(|entry| entry.matches(request, auth_context))
             .max_by_key(|entry| entry.response_time)
-            .cloned()
         else {
             return if request_cache_control.only_if_cached {
                 Some(CacheLookup::UnsatisfiedOnlyIfCached)
@@ -996,11 +992,11 @@ impl MemoryCache {
             return if request_cache_control.only_if_cached {
                 Some(CacheLookup::UnsatisfiedOnlyIfCached)
             } else {
-                Some(CacheLookup::Stale(Box::new(entry)))
+                Some(CacheLookup::Stale(Box::new(entry.clone())))
             };
         }
 
-        Some(CacheLookup::Fresh(Box::new(entry)))
+        Some(CacheLookup::Fresh(entry.response_with_age(now)))
     }
 
     fn lookup_range(
@@ -1020,7 +1016,6 @@ impl MemoryCache {
                 .iter()
                 .filter(|entry| entry.matches(request, auth_context))
                 .max_by_key(|entry| entry.response_time)
-                .cloned()
         }) {
             if !if_range_matches_entry(
                 if_range,
@@ -1043,7 +1038,6 @@ impl MemoryCache {
                 .iter()
                 .filter(|entry| entry.matches(request, auth_context))
                 .max_by_key(|entry| entry.response_time)
-                .cloned()
         }) {
             if !if_range_matches_entry(
                 if_range,
@@ -1084,11 +1078,11 @@ impl MemoryCache {
 
         let key = request.url().cache_key();
         let variants = self.entries.entry(key).or_default();
-        if let Some(existing) = variants
-            .iter_mut()
-            .find(|existing| existing.same_variant(&entry))
-        {
-            if request.method() == Method::Head && !existing.response.body.is_empty() {
+        if request.method() == Method::Head {
+            if let Some(existing) = variants
+                .iter_mut()
+                .find(|existing| existing.same_variant(&entry))
+            {
                 if head_update_is_compatible(existing, &entry) {
                     let body = existing.response.body.clone();
                     let mut updated = entry;
@@ -1098,9 +1092,15 @@ impl MemoryCache {
                     existing.freshness_lifetime = Duration::from_secs(0);
                     existing.cache_control.no_cache = true;
                 }
-            } else {
-                *existing = entry;
             }
+            return;
+        }
+
+        if let Some(existing) = variants
+            .iter_mut()
+            .find(|existing| existing.same_variant(&entry))
+        {
+            *existing = entry;
             return;
         }
 
@@ -1402,7 +1402,7 @@ impl CacheEntry {
 }
 
 enum CacheLookup {
-    Fresh(Box<CacheEntry>),
+    Fresh(Response),
     Stale(Box<CacheEntry>),
     UnsatisfiedOnlyIfCached,
 }
@@ -1666,11 +1666,16 @@ struct VaryHeader {
 
 impl VaryHeader {
     fn matches(&self, request: &Request) -> bool {
-        let values: Vec<_> = request
+        let mut values = request
             .headers_named(&self.name)
-            .map(|header| header.value().to_string())
-            .collect();
-        values == self.values
+            .map(|header| header.value());
+        for expected in &self.values {
+            match values.next() {
+                Some(value) if value == expected => {}
+                _ => return false,
+            }
+        }
+        values.next().is_none()
     }
 }
 
@@ -1736,14 +1741,12 @@ impl CacheControl {
     }
 }
 
-fn response_for_method(response: &Response, method: Method) -> Response {
+fn response_for_method(mut response: Response, method: Method) -> Response {
     if method == Method::Head {
-        let mut response = response.clone();
         response.body.clear();
-        response
-    } else {
-        response.clone()
     }
+
+    response
 }
 
 fn has_user_conditionals(request: &Request) -> bool {
@@ -2567,7 +2570,7 @@ mod tests {
         let lookup = cache.lookup(&full, SystemTime::now(), &AuthContext::default());
         assert!(matches!(
             lookup,
-            Some(super::CacheLookup::Fresh(ref entry)) if entry.response.body == b"abcdef"
+            Some(super::CacheLookup::Fresh(ref response)) if response.body == b"abcdef"
         ));
     }
 
@@ -3637,7 +3640,7 @@ mod tests {
         let direct = CacheControl::from_headers(&[Header::unchecked("Cache-Control", "x-test=1")]);
         assert!(!direct.no_store);
         let head_response = super::response_for_method(
-            &cache.entries[&get.url().cache_key()][0].response,
+            cache.entries[&get.url().cache_key()][0].response.clone(),
             Method::Head,
         );
         assert!(head_response.body.is_empty());

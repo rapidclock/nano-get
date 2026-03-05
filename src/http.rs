@@ -37,24 +37,36 @@ pub(crate) fn write_request<W: Write + ?Sized>(
     target: &str,
     connection_close: bool,
 ) -> Result<(), NanoGetError> {
-    write!(
-        writer,
-        "{} {} HTTP/1.1\r\n",
-        request.method().as_str(),
-        target
-    )?;
+    let mut bytes = Vec::with_capacity(estimate_request_capacity(request, target));
+    bytes.extend_from_slice(request.method().as_str().as_bytes());
+    bytes.extend_from_slice(b" ");
+    bytes.extend_from_slice(target.as_bytes());
+    bytes.extend_from_slice(b" HTTP/1.1\r\n");
 
-    for default_header in request.default_headers_for(connection_close) {
-        if !request.has_header(default_header.name()) {
-            write_header(writer, &default_header)?;
-        }
+    if !request.has_header("host") {
+        append_header_line(&mut bytes, "Host", &request.url().host_header_value());
+    }
+    if !request.has_header("user-agent") {
+        append_header_line(&mut bytes, "User-Agent", "nano-get/0.3.0");
+    }
+    if !request.has_header("accept") {
+        append_header_line(&mut bytes, "Accept", "*/*");
+    }
+    if !request.has_header("connection") {
+        let connection = if connection_close {
+            "close"
+        } else {
+            "keep-alive"
+        };
+        append_header_line(&mut bytes, "Connection", connection);
     }
 
     for header in request.headers() {
-        write_header(writer, header)?;
+        append_header_line(&mut bytes, header.name(), header.value());
     }
 
-    writer.write_all(b"\r\n")?;
+    bytes.extend_from_slice(b"\r\n");
+    writer.write_all(&bytes)?;
     Ok(())
 }
 
@@ -69,21 +81,48 @@ pub(crate) fn write_connect_request<W: Write + ?Sized>(
     } else {
         "keep-alive"
     };
-    write!(writer, "CONNECT {target_authority} HTTP/1.1\r\n")?;
-    write!(writer, "Host: {target_authority}\r\n")?;
-    write!(writer, "Connection: {connection_value}\r\n")?;
+    let mut bytes = Vec::with_capacity(estimate_connect_capacity(target_authority, headers));
+    bytes.extend_from_slice(b"CONNECT ");
+    bytes.extend_from_slice(target_authority.as_bytes());
+    bytes.extend_from_slice(b" HTTP/1.1\r\n");
+    append_header_line(&mut bytes, "Host", target_authority);
+    append_header_line(&mut bytes, "Connection", connection_value);
 
     for header in headers {
-        write_header(writer, header)?;
+        append_header_line(&mut bytes, header.name(), header.value());
     }
 
-    writer.write_all(b"\r\n")?;
+    bytes.extend_from_slice(b"\r\n");
+    writer.write_all(&bytes)?;
     Ok(())
 }
 
-fn write_header<W: Write + ?Sized>(writer: &mut W, header: &Header) -> Result<(), NanoGetError> {
-    write!(writer, "{}: {}\r\n", header.name(), header.value())?;
-    Ok(())
+fn append_header_line(buffer: &mut Vec<u8>, name: &str, value: &str) {
+    buffer.extend_from_slice(name.as_bytes());
+    buffer.extend_from_slice(b": ");
+    buffer.extend_from_slice(value.as_bytes());
+    buffer.extend_from_slice(b"\r\n");
+}
+
+fn estimate_request_capacity(request: &Request, target: &str) -> usize {
+    let request_line = request.method().as_str().len() + 1 + target.len() + " HTTP/1.1\r\n".len();
+    let custom_headers: usize = request
+        .headers()
+        .iter()
+        .map(|header| header.name().len() + header.value().len() + 4)
+        .sum();
+
+    request_line + custom_headers + 160
+}
+
+fn estimate_connect_capacity(target_authority: &str, headers: &[Header]) -> usize {
+    let request_line = "CONNECT ".len() + target_authority.len() + " HTTP/1.1\r\n".len();
+    let custom_headers: usize = headers
+        .iter()
+        .map(|header| header.name().len() + header.value().len() + 4)
+        .sum();
+
+    request_line + custom_headers + 96
 }
 
 #[cfg(test)]
@@ -231,18 +270,20 @@ mod tests {
         assert!(writer.flush().is_err());
     }
 
-    struct FailOnThirdWrite {
+    struct PartialThenFailWriter {
         writes: usize,
     }
 
-    impl Write for FailOnThirdWrite {
+    impl Write for PartialThenFailWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
             self.writes += 1;
             if self.writes >= 3 {
                 Err(std::io::Error::new(
                     std::io::ErrorKind::BrokenPipe,
-                    "forced third write failure",
+                    "forced write failure",
                 ))
+            } else if buf.len() > 1 {
+                Ok(buf.len() / 2)
             } else {
                 Ok(buf.len())
             }
@@ -254,8 +295,8 @@ mod tests {
     }
 
     #[test]
-    fn connect_writer_errors_can_happen_after_initial_lines() {
-        let mut writer = FailOnThirdWrite { writes: 0 };
+    fn connect_writer_handles_partial_writes_and_late_errors() {
+        let mut writer = PartialThenFailWriter { writes: 0 };
         let error = write_connect_request(&mut writer, "example.com:443", &[], false).unwrap_err();
         assert!(matches!(error, crate::errors::NanoGetError::Io(_)));
         writer.flush().unwrap();

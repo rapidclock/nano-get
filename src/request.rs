@@ -6,7 +6,9 @@ use crate::date::format_http_date;
 use crate::errors::NanoGetError;
 use crate::url::{ToUrl, Url};
 
+#[cfg(test)]
 const DEFAULT_USER_AGENT: &str = "nano-get/0.3.0";
+#[cfg(test)]
 const DEFAULT_ACCEPT: &str = "*/*";
 
 /// A single HTTP header field.
@@ -327,6 +329,7 @@ impl Request {
         self.default_headers_for(true)
     }
 
+    #[cfg(test)]
     pub(crate) fn default_headers_for(&self, connection_close: bool) -> [Header; 4] {
         [
             Header::unchecked("Host", self.url.host_header_value()),
@@ -367,22 +370,41 @@ impl Request {
 }
 
 fn validate_header_name(name: &str) -> Result<(), NanoGetError> {
-    if name.is_empty()
-        || name.contains(':')
-        || name
-            .chars()
-            .any(|ch| ch == '\r' || ch == '\n' || ch.is_ascii_control() || ch.is_ascii_whitespace())
-    {
+    if name.is_empty() || !name.as_bytes().iter().all(|byte| is_tchar(*byte)) {
         return Err(NanoGetError::InvalidHeaderName(name.to_string()));
     }
     Ok(())
 }
 
 fn validate_header_value(value: &str) -> Result<(), NanoGetError> {
-    if value.chars().any(|ch| ch == '\r' || ch == '\n') {
+    if value
+        .chars()
+        .any(|ch| ch == '\r' || ch == '\n' || (ch.is_ascii_control() && ch != '\t'))
+    {
         return Err(NanoGetError::InvalidHeaderValue(value.to_string()));
     }
     Ok(())
+}
+
+fn is_tchar(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric()
+        || matches!(
+            byte,
+            b'!' | b'#'
+                | b'$'
+                | b'%'
+                | b'&'
+                | b'\''
+                | b'*'
+                | b'+'
+                | b'-'
+                | b'.'
+                | b'^'
+                | b'_'
+                | b'`'
+                | b'|'
+                | b'~'
+        )
 }
 
 fn validate_request_header_name(name: &str) -> Result<(), NanoGetError> {
@@ -435,6 +457,12 @@ mod tests {
             .add_header("bad:name", "value")
             .unwrap_err();
         assert!(matches!(error, NanoGetError::InvalidHeaderName(_)));
+
+        let error = Request::get("http://example.com")
+            .unwrap()
+            .add_header("bad(name)", "value")
+            .unwrap_err();
+        assert!(matches!(error, NanoGetError::InvalidHeaderName(_)));
     }
 
     #[test]
@@ -442,6 +470,12 @@ mod tests {
         let error = Request::get("http://example.com")
             .unwrap()
             .add_header("x-test", "bad\r\nvalue")
+            .unwrap_err();
+        assert!(matches!(error, NanoGetError::InvalidHeaderValue(_)));
+
+        let error = Request::get("http://example.com")
+            .unwrap()
+            .add_header("x-test", "bad\u{0000}value")
             .unwrap_err();
         assert!(matches!(error, NanoGetError::InvalidHeaderValue(_)));
     }

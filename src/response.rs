@@ -183,6 +183,7 @@ pub(crate) fn read_response_head<R: BufRead>(
 ) -> Result<ResponseHead, NanoGetError> {
     let (status_line, status_line_has_crlf) = read_line(reader).map_err(|error| match error {
         NanoGetError::Io(error) => NanoGetError::MalformedStatusLine(error.to_string()),
+        NanoGetError::MalformedHeader(line) => NanoGetError::MalformedStatusLine(line),
         other => other,
     })?;
     if strict && !status_line_has_crlf {
@@ -196,17 +197,6 @@ pub(crate) fn read_response_head<R: BufRead>(
         reason_phrase,
         headers,
     })
-}
-
-pub(crate) fn connection_tokens(headers: &[Header]) -> Vec<String> {
-    headers
-        .iter()
-        .filter(|header| header.matches_name("connection"))
-        .flat_map(|header| header.value().split(','))
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_ascii_lowercase)
-        .collect()
 }
 
 fn read_headers<R: BufRead>(reader: &mut R, strict: bool) -> Result<Vec<Header>, NanoGetError> {
@@ -472,12 +462,20 @@ pub(crate) fn should_close_connection(
         return true;
     }
 
-    let tokens = connection_tokens(headers);
-    if tokens.iter().any(|token| token == "close") {
+    if has_connection_token(headers, "close") {
         return true;
     }
 
-    version == HttpVersion::Http10 && !tokens.iter().any(|token| token == "keep-alive")
+    version == HttpVersion::Http10 && !has_connection_token(headers, "keep-alive")
+}
+
+fn has_connection_token(headers: &[Header], token: &str) -> bool {
+    headers
+        .iter()
+        .filter(|header| header.matches_name("connection"))
+        .flat_map(|header| header.value().split(','))
+        .map(str::trim)
+        .any(|candidate| candidate.eq_ignore_ascii_case(token))
 }
 
 #[cfg(test)]
@@ -789,7 +787,7 @@ mod tests {
 
         let mut invalid_status = BufReader::new(&b"\xff\r\n\r\n"[..]);
         let error = read_response_head(&mut invalid_status, true).unwrap_err();
-        assert!(matches!(error, NanoGetError::MalformedHeader(_)));
+        assert!(matches!(error, NanoGetError::MalformedStatusLine(_)));
 
         let mut invalid_header = BufReader::new(&b"HTTP/1.1 200 OK\r\nX:\xff\r\n\r\n"[..]);
         let error = read_response_head(&mut invalid_header, true).unwrap_err();

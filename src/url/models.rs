@@ -77,6 +77,7 @@ impl Url {
         }
 
         if let Some(query) = trimmed.strip_prefix('?') {
+            validate_target_component(query, "query")?;
             return Ok(Self {
                 scheme: self.scheme.clone(),
                 host: self.host.clone(),
@@ -91,6 +92,10 @@ impl Url {
             parse_target(trimmed)?
         } else {
             let (relative_path, query) = split_path_and_query(trimmed);
+            validate_target_component(relative_path, "path")?;
+            if let Some(query) = query {
+                validate_target_component(query, "query")?;
+            }
             let combined = format!("{}{}", base_directory(&self.path), relative_path);
             (
                 normalize_path(&combined),
@@ -258,7 +263,8 @@ fn parse_authority(scheme: &str, authority: &str) -> Result<(String, u16, bool),
         let closing = authority
             .find(']')
             .ok_or_else(|| NanoGetError::invalid_url("unterminated IPv6 host"))?;
-        let host = authority[1..closing].to_string();
+        let host = authority[1..closing].to_ascii_lowercase();
+        validate_ipv6_literal(&host)?;
         let remainder = &authority[closing + 1..];
         if remainder.is_empty() {
             return Ok((host, default_port, false));
@@ -270,18 +276,18 @@ fn parse_authority(scheme: &str, authority: &str) -> Result<(String, u16, bool),
     }
 
     let (host, port, explicit_port) = match authority.rsplit_once(':') {
-        Some((host, port)) if !host.contains(':') => (host.to_string(), parse_port(port)?, true),
+        Some((host, port)) if !host.contains(':') => {
+            (host.to_ascii_lowercase(), parse_port(port)?, true)
+        }
         Some(_) => {
             return Err(NanoGetError::invalid_url(
                 "IPv6 hosts must use bracket notation",
             ));
         }
-        None => (authority.to_string(), default_port, false),
+        None => (authority.to_ascii_lowercase(), default_port, false),
     };
 
-    if host.is_empty() {
-        return Err(NanoGetError::invalid_url("missing host"));
-    }
+    validate_reg_name_host(&host)?;
 
     Ok((host, port, explicit_port))
 }
@@ -298,6 +304,7 @@ fn parse_target(target: &str) -> Result<(String, Option<String>), NanoGetError> 
     }
 
     if let Some(query) = target.strip_prefix('?') {
+        validate_target_component(query, "query")?;
         return Ok(("/".to_string(), Some(query.to_string())));
     }
 
@@ -306,6 +313,10 @@ fn parse_target(target: &str) -> Result<(String, Option<String>), NanoGetError> 
     }
 
     let (path, query) = split_path_and_query(target);
+    validate_target_component(path, "path")?;
+    if let Some(query) = query {
+        validate_target_component(query, "query")?;
+    }
     Ok((normalize_path(path), query.map(|value| value.to_string())))
 }
 
@@ -342,6 +353,55 @@ fn base_directory(path: &str) -> String {
         Some(_) => "/".to_string(),
         None => "/".to_string(),
     }
+}
+
+fn validate_reg_name_host(host: &str) -> Result<(), NanoGetError> {
+    if host.is_empty() {
+        return Err(NanoGetError::invalid_url("missing host"));
+    }
+
+    if !host.is_ascii() {
+        return Err(NanoGetError::invalid_url(
+            "host must be ASCII (use punycode for international domains)",
+        ));
+    }
+
+    if host.chars().any(|ch| {
+        ch.is_ascii_control()
+            || ch.is_ascii_whitespace()
+            || matches!(ch, '/' | '\\' | '?' | '#' | '[' | ']')
+    }) {
+        return Err(NanoGetError::invalid_url("invalid host"));
+    }
+
+    Ok(())
+}
+
+fn validate_ipv6_literal(host: &str) -> Result<(), NanoGetError> {
+    if host.is_empty() {
+        return Err(NanoGetError::invalid_url("unterminated IPv6 host"));
+    }
+
+    if host
+        .chars()
+        .all(|ch| ch.is_ascii_hexdigit() || ch == ':' || ch == '.')
+    {
+        return Ok(());
+    }
+
+    Err(NanoGetError::invalid_url("invalid IPv6 authority"))
+}
+
+fn validate_target_component(value: &str, component: &str) -> Result<(), NanoGetError> {
+    if value
+        .chars()
+        .any(|ch| ch.is_ascii_control() || ch.is_ascii_whitespace())
+    {
+        return Err(NanoGetError::invalid_url(format!(
+            "invalid {component}: contains control characters or whitespace"
+        )));
+    }
+    Ok(())
 }
 
 fn normalize_path(path: &str) -> String {
@@ -522,6 +582,22 @@ mod tests {
             parse_target("?x=1").unwrap(),
             ("/".to_string(), Some("x=1".to_string()))
         );
+    }
+
+    #[test]
+    fn rejects_hosts_and_targets_with_controls_or_whitespace() {
+        assert!(matches!(
+            Url::parse("http://exa mple.com"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            Url::parse("http://example.com/hello world"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            Url::parse("http://example.com/path?x=\n1"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
     }
 
     #[test]

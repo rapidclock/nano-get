@@ -526,6 +526,27 @@ fn head_updates_cached_get_metadata() {
 }
 
 #[test]
+fn head_without_cached_get_does_not_seed_empty_get_cache_entries() {
+    let server = spawn_http_server(vec![
+        b"HTTP/1.1 200 OK\r\nCache-Control: max-age=60\r\nContent-Length: 5\r\nX-Head: yes\r\n\r\n"
+            .to_vec(),
+        b"HTTP/1.1 200 OK\r\nCache-Control: max-age=60\r\nContent-Length: 5\r\n\r\nhello".to_vec(),
+    ]);
+
+    let client = Client::builder().cache_mode(CacheMode::Memory).build();
+    let url = format!("{}/head-seed", server.base_url);
+
+    let head_response = client.execute(Request::head(&url).unwrap()).unwrap();
+    let get_response = client.execute(Request::get(&url).unwrap()).unwrap();
+
+    assert_eq!(head_response.header("x-head"), Some("yes"));
+    assert!(head_response.body.is_empty());
+    assert_eq!(get_response.body_text().unwrap(), "hello");
+    assert_eq!(server.request_lines.lock().unwrap().len(), 2);
+    server.join();
+}
+
+#[test]
 fn http_proxy_requests_use_absolute_form_targets() {
     let server = spawn_http_server(vec![
         b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nproxy".to_vec()
