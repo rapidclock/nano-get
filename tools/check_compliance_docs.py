@@ -14,6 +14,8 @@ ALLOWED_STATUSES = {"implemented", "not applicable"}
 
 
 def parse_markdown_table(path: Path) -> list[list[str]]:
+    if not path.is_file():
+        raise ValueError(f"required file not found: {path}")
     rows: list[list[str]] = []
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -86,58 +88,63 @@ def extract_test_names(cell: str) -> list[str]:
 
 
 def main() -> int:
-    matrix = parse_matrix(MATRIX)
-    index = parse_index(INDEX)
+    try:
+        matrix = parse_matrix(MATRIX)
+        index = parse_index(INDEX)
 
-    matrix_ids = set(matrix)
-    index_ids = set(index)
+        matrix_ids = set(matrix)
+        index_ids = set(index)
 
-    errors: list[str] = []
+        errors: list[str] = []
 
-    missing_in_index = sorted(matrix_ids - index_ids)
-    if missing_in_index:
-        errors.append("IDs missing in index: " + ", ".join(missing_in_index))
+        missing_in_index = sorted(matrix_ids - index_ids)
+        if missing_in_index:
+            errors.append("IDs missing in index: " + ", ".join(missing_in_index))
 
-    extra_in_index = sorted(index_ids - matrix_ids)
-    if extra_in_index:
-        errors.append("IDs present only in index: " + ", ".join(extra_in_index))
+        extra_in_index = sorted(index_ids - matrix_ids)
+        if extra_in_index:
+            errors.append("IDs present only in index: " + ", ".join(extra_in_index))
 
-    function_names = collect_rust_function_names(ROOT)
+        function_names = collect_rust_function_names(ROOT)
 
-    for req_id in sorted(matrix_ids & index_ids):
-        status = matrix[req_id]
-        test_cell = index[req_id].strip()
+        for req_id in sorted(matrix_ids & index_ids):
+            status = matrix[req_id]
+            test_cell = index[req_id].strip()
 
-        if status == "not applicable":
-            if test_cell.lower() != "n/a":
+            if status == "not applicable":
+                if test_cell.lower() != "n/a":
+                    errors.append(
+                        f"{req_id}: status is 'not applicable' but tests cell is {test_cell!r}"
+                    )
+                continue
+
+            tests = extract_test_names(test_cell)
+            if not tests:
+                errors.append(f"{req_id}: implemented rows must reference at least one test")
+                continue
+
+            missing_tests = sorted(test for test in tests if test not in function_names)
+            if missing_tests:
                 errors.append(
-                    f"{req_id}: status is 'not applicable' but tests cell is {test_cell!r}"
+                    f"{req_id}: referenced tests not found: {', '.join(missing_tests)}"
                 )
-            continue
 
-        tests = extract_test_names(test_cell)
-        if not tests:
-            errors.append(f"{req_id}: implemented rows must reference at least one test")
-            continue
+        if errors:
+            print("compliance docs check failed:")
+            for error in errors:
+                print(f"- {error}")
+            return 1
 
-        missing_tests = sorted(test for test in tests if test not in function_names)
-        if missing_tests:
-            errors.append(
-                f"{req_id}: referenced tests not found: {', '.join(missing_tests)}"
-            )
-
-    if errors:
+        print(
+            f"compliance docs check passed ({len(matrix_ids)} requirements, "
+            f"{sum(1 for s in matrix.values() if s == 'implemented')} implemented, "
+            f"{sum(1 for s in matrix.values() if s == 'not applicable')} not applicable)"
+        )
+        return 0
+    except (OSError, ValueError) as error:
         print("compliance docs check failed:")
-        for error in errors:
-            print(f"- {error}")
+        print(f"- {error}")
         return 1
-
-    print(
-        f"compliance docs check passed ({len(matrix_ids)} requirements, "
-        f"{sum(1 for s in matrix.values() if s == 'implemented')} implemented, "
-        f"{sum(1 for s in matrix.values() if s == 'not applicable')} not applicable)"
-    )
-    return 0
 
 
 if __name__ == "__main__":
