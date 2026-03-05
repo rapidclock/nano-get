@@ -1,11 +1,12 @@
 [package]
 name = "nano-get"
 description = """
-A very tiny implementation of HTTP(s) GET, using minimal dependencies.
+A tiny HTTP/1.1 GET and HEAD client with zero dependencies by default.
 """
-version = "0.2.4"
+version = "0.3.0"
 authors = ["Rahul Thomas <rapidclock@users.noreply.github.com>"]
-edition = "2018"
+edition = "2021"
+rust-version = "1.71"
 license = "MIT"
 repository = "https://github.com/rapidclock/nano-get"
 documentation = "https://docs.rs/nano-get"
@@ -23,9 +24,55 @@ readme = "README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-openssl = { version = "0.10.29", optional = true }
+openssl = { version = "0.10.75", optional = true }
 
 [features]
 http = []
 https = ["openssl"]
 default = ["http"]
+
+[[example]]
+name = "simple-get"
+path = "examples/simple-get/main.rs"
+
+[[example]]
+name = "get-bytes"
+path = "examples/get-bytes/main.rs"
+
+[[example]]
+name = "head-request"
+path = "examples/head-request/main.rs"
+
+[[example]]
+name = "request-builder"
+path = "examples/request-builder/main.rs"
+
+[[example]]
+name = "protocol-specific-helpers"
+path = "examples/protocol-specific-helpers/main.rs"
+required-features = ["https"]
+
+[[example]]
+name = "session-reuse-and-pipelining"
+path = "examples/session-reuse-and-pipelining/main.rs"
+
+[[example]]
+name = "memory-cache"
+path = "examples/memory-cache/main.rs"
+
+[[example]]
+name = "basic-auth"
+path = "examples/basic-auth/main.rs"
+
+[[example]]
+name = "custom-auth-handler"
+path = "examples/custom-auth-handler/main.rs"
+
+[[example]]
+name = "proxy-and-proxy-auth"
+path = "examples/proxy-and-proxy-auth/main.rs"
+
+[[example]]
+name = "advanced-client"
+path = "examples/advanced-client/main.rs"
+required-features = ["https"]

@@ -1,169 +1,316 @@
 # nano-get
 [![Crates.io](https://img.shields.io/crates/v/nano-get.svg)](https://crates.io/crates/nano-get)
 [![Docs.rs](https://docs.rs/nano-get/badge.svg)](https://docs.rs/nano-get)
-![Rust](https://github.com/rapidclock/nano-get/workflows/Rust/badge.svg?branch=master&event=push)
+[![Checker](https://github.com/rapidclock/nano-get/actions/workflows/checker.yml/badge.svg?branch=main)](https://github.com/rapidclock/nano-get/actions/workflows/checker.yml)
 
-A minimalistic implementation of HTTP GET using only the standard library by default.
+`nano-get` is a tiny `HTTP/1.1` client for `GET` and `HEAD`.
 
-If you require `https`, please enable the `"https"` feature flag like:
-```
-nano-get = { version = "0.2.4", features = ["https"] }
-```
+- Default build: zero external dependencies.
+- HTTPS: enable the `https` feature to use the system OpenSSL library through the optional `openssl` crate.
+- API style: simple helper functions for common calls, plus typed `Request`/`Response` and `Client`/`Session` APIs when you need more control.
+- Edition: Rust `2021`.
+- MSRV: Rust `1.71.0`.
+- CI: tested on Rust `1.71.0` and latest `stable`.
 
-Enabling the `https` flag, uses the rust [openssl](https://crates.io/crates/openssl) crate.
- 
-The OpenSSL Crate assumes that you have OpenSSL in your environment.
+## Installation
 
-Please _note_ that this may not be the best or most efficient implementation of the HTTP GET. 
-The whole purpose is to have a basic functioning HTTP GET implementation and avoid having to 
-import a gazzilion other packages, when all you want is a regular GET method for something simple.
+HTTP only:
 
-More features might be added later, with the primary goal being to reduce the final binary size 
-by not having too many dependencies other than this crate.
-
-Currently the only other dependency is the [openssl](https://crates.io/crates/openssl) crate if you
-enable the `"https"` feature flag for this crate. The default use of this crate has zero external dependencies,
-other than the standard library.
-
-## Feature Flags
-* `https` : This enables https based on the Rust [openssl](https://crates.io/crates/openssl) crate
-
-## Example Usages
-
-If all you care about is making a get request, then you can call the `nano_get::get()` method like below.
-```rust
-extern crate nano_get;
-use nano_get::get;
-
-fn main() {
-    let response = get("http://dummy.restapiexample.com/api/v1/employees");
-    println!("{}", response);
-}
-```
-An example with the `https` feature flag enabled:
-```rust
-extern crate nano_get;
-use nano_get::get;
-
-fn main() {
-    let response = get("https://google.com");
-    println!("{}", response);
-}
-```
-
-For more fine-grained control of the request/response, you can construct a request.
-
-```rust
-extern crate nano_get;
-use nano_get::get;
-
-fn main() {
-    let mut request = Request::default_get_request("http://dummy.restapiexample.com/api/v1/employees").unwrap();
-    request.add_header("test", "abracadabra");
-    let response = request.execute().unwrap();
-    println!("{}", response.status);
-    println!("{}", response.body);
-}
-```
-
-## Models
-The basic models in this crate are:
-* Url
-* Request
-* Response
-
-## Executing HTTP(s) Requests:
-
-There are two ways to execute the HTTP(s) requests.
-
-### Basic Get
-The basic version, demonstrated by the use of the `nano_get::get` function, which takes a url
-and returns the body of the response.
-
-#### Example
-```rust
-extern crate nano_get;
-use nano_get::get;
-
-fn main() {
-    let response = nano_get::get("https://www.google.com");
-    println!("{}", response);
-}
-```
-
-### Request-Response based
-Another more fine-grained method exists by using the `nano_get::Request` object.
-This gives you access to request headers, optional request body and the execution returns a
-`nano_get::Response` object. This allows inspection of HTTP Response codes, response body, etc.
-
-#### Example
-```rust
-extern crate nano_get;
-use nano_get::{Request, Response};
-
-fn main() {
-    let mut request = Request::default_get_request("http://example.com/").unwrap();
-    let response: Response = request.execute().unwrap();
-    println!("{}", response.body);
-}
-```
-For details, check the `Request` and `Response` structure documentation.
-
-## Async:
-As of writing this, this crate does not using async/await features of Rust.
-However, this does not stop the user from using this library in their application in a async context.
-
-A dummy example is shown below. This uses the free REST API at [jsonplaceholder](https://jsonplaceholder.typicode.com) to retreive 100 albums (100 HTTPS GET requests) concurrently using tokio/futures async/await utils.
-
-This example is not a benchmark and only meant to demonstrate how to write an async wrapper around the crate's get method.
-This is also not meant to be demonstrative of idiomatic uses of the async libraries.
-
-**Cargo.toml snippet**
 ```toml
 [dependencies]
-nano-get = {version = "0.2.4", features = ["https"] }
-tokio = { version = "0.2.10", features = ["blocking", "rt-threaded"] }
-futures = "0.3.1"
+nano-get = "0.3.0"
 ```
 
-**main.rs**
+HTTP + HTTPS:
+
+```toml
+[dependencies]
+nano-get = { version = "0.3.0", features = ["https"] }
+```
+
+## Examples
+
+The repository includes a graduated set of runnable Cargo examples under
+[`examples/`](examples/README.md), starting with simple helper functions and ending with advanced
+client configuration.
+
+Representative commands:
+
+- `cargo run --example simple-get`
+- `cargo run --example request-builder`
+- `cargo run --example advanced-client --features https`
+
+## Simple API
+
+The `get` helper is the main ergonomic entry point. It auto-follows redirects and returns the body as UTF-8 text.
+
 ```rust
-extern crate futures;
-extern crate nano_get;
-extern crate tokio;
-
-use std::time::Instant;
-
-use tokio::runtime::{Runtime, Builder};
-use futures::future::try_join_all;
-
-fn main() {
-    let mut runtime: Runtime = Builder::new().threaded_scheduler().build().unwrap();
-    runtime.block_on(async {
-        let base_url = "https://jsonplaceholder.typicode.com/albums";
-        let mut handles = Vec::with_capacity(100);
-        let start = Instant::now();
-        for i in 1..=100 {
-            let url = format!("{}/{}", base_url, i);
-            handles.push(tokio::task::spawn_blocking(move || nano_get::get(url)));
-        }
-        let responses: Vec<String> = try_join_all(handles).await.unwrap();
-        let duration = start.elapsed();
-        println!("# : {}\n{}", responses.len(), responses.last().unwrap());
-        println!("Time elapsed in http get is: {:?}", duration);
-        println!("Average time for get is: {}s", duration.as_secs_f64() / (responses.len() as f64));
-    });
+fn main() -> Result<(), nano_get::NanoGetError> {
+    let body = nano_get::get("http://example.com")?;
+    println!("{body}");
+    Ok(())
 }
 ```
 
-**example output**
-```text
-# : 100
-{
-  "userId": 10,
-  "id": 100,
-  "title": "enim repellat iste"
+If you need raw bytes instead of text:
+
+```rust
+fn main() -> Result<(), nano_get::NanoGetError> {
+    let body = nano_get::get_bytes("http://example.com")?;
+    println!("received {} bytes", body.len());
+    Ok(())
 }
-Time elapsed in http get is: 1.171043748s
-Average time for get is: 0.01171043748s
 ```
+
+For `HEAD`:
+
+```rust
+fn main() -> Result<(), nano_get::NanoGetError> {
+    let response = nano_get::head("http://example.com")?;
+    println!("status = {}", response.status_code);
+    println!("content-type = {:?}", response.header("content-type"));
+    Ok(())
+}
+```
+
+## HTTPS
+
+With the `https` feature enabled, unified helpers route to TLS automatically:
+
+```rust
+fn main() -> Result<(), nano_get::NanoGetError> {
+    let body = nano_get::get("https://example.com")?;
+    println!("{body}");
+    Ok(())
+}
+```
+
+You can also force the protocol-specific helpers:
+
+- `nano_get::get_http`
+- `nano_get::get_http_bytes`
+- `nano_get::head_http`
+- `nano_get::get_https`
+- `nano_get::get_https_bytes`
+- `nano_get::head_https`
+
+Without the `https` feature, attempting to request an `https://` URL returns a typed `NanoGetError::HttpsFeatureRequired`.
+
+## Advanced API
+
+Use `Request` when you need custom headers or manual redirect handling.
+
+```rust
+use nano_get::{RedirectPolicy, Request};
+
+fn main() -> Result<(), nano_get::NanoGetError> {
+    let mut request = Request::get("http://example.com")?
+        .with_redirect_policy(RedirectPolicy::follow(5));
+    request.add_header("Accept", "text/plain")?;
+
+    let response = request.execute()?;
+    println!("status = {}", response.status_code);
+    println!("reason = {}", response.reason_phrase);
+    println!("body = {}", response.body_text()?);
+    Ok(())
+}
+```
+
+Use `Client` when you need connection reuse, caching, or proxy support.
+
+```rust
+use nano_get::{CacheMode, Client, ConnectionPolicy, ProxyConfig, Request};
+
+fn main() -> Result<(), nano_get::NanoGetError> {
+    let proxy = ProxyConfig::new("http://127.0.0.1:8080")?;
+    let client = Client::builder()
+        .connection_policy(ConnectionPolicy::Reuse)
+        .cache_mode(CacheMode::Memory)
+        .proxy(proxy)
+        .build();
+
+    let response = client.execute(Request::get("https://example.com")?)?;
+    println!("status = {}", response.status_code);
+    Ok(())
+}
+```
+
+## Authentication
+
+`nano-get` exposes both ergonomic helpers for common cases and a generic challenge/response hook
+for non-Basic schemes.
+
+Challenge-driven Basic auth:
+
+```rust
+use nano_get::{Client, Request};
+
+fn main() -> Result<(), nano_get::NanoGetError> {
+    let client = Client::builder().basic_auth("user", "pass").build();
+    let response = client.execute(Request::get("http://example.com/protected")?)?;
+    println!("{}", response.status_code);
+    Ok(())
+}
+```
+
+Challenge-driven Basic proxy auth:
+
+```rust
+use nano_get::{Client, ProxyConfig, Request};
+
+fn main() -> Result<(), nano_get::NanoGetError> {
+    let proxy = ProxyConfig::new("http://127.0.0.1:8080")?;
+    let client = Client::builder()
+        .proxy(proxy)
+        .basic_proxy_auth("proxy-user", "proxy-pass")
+        .build();
+    let response = client.execute(Request::get("http://example.com")?)?;
+    println!("{}", response.status_code);
+    Ok(())
+}
+```
+
+Preemptive Basic auth is also available when you know the server or proxy requires credentials on
+the first request:
+
+- `ClientBuilder::preemptive_basic_auth`
+- `ClientBuilder::preemptive_basic_proxy_auth`
+
+Manual request-level overrides:
+
+- `Request::authorization`
+- `Request::proxy_authorization`
+- `Request::basic_auth`
+- `Request::proxy_basic_auth`
+
+For non-Basic schemes, install a custom `AuthHandler` with `ClientBuilder::auth_handler` or
+`ClientBuilder::proxy_auth_handler`.
+
+Use `Session` when you want a dedicated persistent connection or pipelined safe requests:
+
+```rust
+use nano_get::{Client, ConnectionPolicy, Request};
+
+fn main() -> Result<(), nano_get::NanoGetError> {
+    let client = Client::builder()
+        .connection_policy(ConnectionPolicy::Reuse)
+        .build();
+    let mut session = client.session();
+
+    let responses = session.execute_pipelined(&[
+        Request::get("http://example.com/one")?,
+        Request::get("http://example.com/two")?,
+    ])?;
+    println!("{} {}", responses[0].status_code, responses[1].status_code);
+    Ok(())
+}
+```
+
+`Response` exposes:
+
+- `version`
+- `status_code`
+- `reason_phrase`
+- ordered `headers`
+- optional `trailers`
+- raw `body: Vec<u8>`
+- helper methods like `header`, `trailer`, `body_text`, and `headers_named`
+
+## Redirects
+
+- Helper functions auto-follow redirects up to `10` hops.
+- `Request::execute()` does not follow redirects unless you opt in with `RedirectPolicy::follow(...)`.
+- Supported redirect statuses: `301`, `302`, `303`, `307`, `308`.
+
+Origin `Authorization` headers are preserved only for same-scheme, same-host, same-port redirects.
+`Proxy-Authorization` is scoped to the configured proxy and is never forwarded to the origin.
+
+## Migration Notes
+
+- Redirect `Location` values with a `scheme:` prefix are now interpreted as absolute URI
+  references. Unsupported schemes (for example `foo:bar` or `ftp:...`) now fail with
+  `NanoGetError::UnsupportedScheme` instead of being treated as relative paths.
+- Response parsing now enforces defensive bounds (maximum line length and maximum header count).
+  Oversized status/header lines or excessive header blocks are rejected as malformed.
+- Pipelining replay logic now retries unanswered safe requests after abrupt peer disconnects even
+  when `Connection: close` was not explicitly signaled.
+- Reused keep-alive connections now retry once on EOF-shaped read failures (stale socket closes)
+  before surfacing an error.
+- If a server violates `HEAD` semantics by sending body bytes, the connection is now retired
+  before reuse to prevent response-stream desynchronization.
+
+## Strict Header Rules
+
+`nano-get` owns the wire-level headers that are required for RFC-correct request framing and proxy
+behavior. These headers are rejected if you try to add them manually:
+
+- Protocol-managed: `Host`, `Connection`, `Content-Length`, `Transfer-Encoding`, `Trailer`, `Upgrade`
+- Hop-by-hop: `Keep-Alive`, `Proxy-Connection`, `TE`
+
+End-to-end auth headers remain available through the explicit request/auth APIs.
+
+## Caching
+
+The built-in in-memory cache is opt-in through `CacheMode::Memory`.
+
+Supported request directives:
+
+- `max-age`
+- `min-fresh`
+- `max-stale`
+- `only-if-cached`
+- `no-cache`
+- `no-store`
+
+Supported response directives:
+
+- `max-age`
+- `must-revalidate`
+- `proxy-revalidate`
+- `no-cache`
+- `no-store`
+- `public`
+- `private`
+
+Additional cache behavior:
+
+- `ETag` and `Last-Modified` validator revalidation
+- `Vary`-keyed variants
+- RFC-style `Age` handling in freshness calculations
+- `HEAD` metadata refresh for cached `GET` responses
+- cacheable `206 Partial Content` storage and safe partial combination
+- conservative auth-aware caching rules
+
+Deliberate exclusions:
+
+- compression
+- cookies
+- async I/O
+- HTTP/2 and HTTP/3
+
+## Compliance
+
+The crate’s compliance claim covers all client-applicable RFC 9110, RFC 9111, and RFC 9112
+requirements for an HTTP/1.1 `GET`/`HEAD` user agent, within the documented claim boundary.
+
+Auditable artifacts:
+
+- [docs/compliance/http11-get-head-rfc-matrix.md](docs/compliance/http11-get-head-rfc-matrix.md)
+- [docs/compliance/http11-get-head-requirement-test-index.md](docs/compliance/http11-get-head-requirement-test-index.md)
+
+Local compliance/coverage commands:
+
+- `cargo llvm-cov clean --workspace`
+- `cargo llvm-cov --workspace --no-default-features --features http --lcov --output-path /tmp/http_cov.info`
+- `python3 tools/check_line_coverage.py --lcov /tmp/http_cov.info --root . --require 95`
+- `cargo llvm-cov clean --workspace`
+- `cargo llvm-cov --workspace --all-features --lcov --output-path /tmp/all_cov.info`
+- `python3 tools/check_line_coverage.py --lcov /tmp/all_cov.info --root . --require 95`
+
+## Notes
+
+- `nano-get` supports `HTTP/1.0` and `HTTP/1.1` responses.
+- Supported body framing: `Content-Length`, `Transfer-Encoding: chunked`, and connection-close bodies.
+- Supports persistent connections, request pipelining for `GET`/`HEAD`, in-memory caching, direct HTTP, direct HTTPS, HTTP proxies, HTTPS over HTTP `CONNECT` proxies, `401`/`407` auth challenge parsing, and Basic auth helpers.
+- Conditional request helpers are available on `Request` for validators and ranges.
+- Compression, cookies, async, HTTP/2, and non-core auth scheme implementations are intentionally out of scope for `0.3.0`.
