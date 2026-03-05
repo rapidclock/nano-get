@@ -68,7 +68,7 @@ impl Url {
             ));
         }
 
-        if trimmed.contains("://") {
+        if has_uri_scheme_prefix(trimmed) {
             return Self::parse(trimmed);
         }
 
@@ -336,6 +336,25 @@ fn default_port_for_scheme(scheme: &str) -> Option<u16> {
     }
 }
 
+fn has_uri_scheme_prefix(value: &str) -> bool {
+    let Some((scheme, _rest)) = value.split_once("://") else {
+        return false;
+    };
+    is_valid_uri_scheme(scheme)
+}
+
+fn is_valid_uri_scheme(scheme: &str) -> bool {
+    let mut bytes = scheme.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    if !first.is_ascii_alphabetic() {
+        return false;
+    }
+
+    bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+}
+
 fn format_host_for_authority(host: &str) -> String {
     if host.contains(':') {
         format!("[{host}]")
@@ -391,6 +410,12 @@ fn validate_ipv6_literal(host: &str) -> Result<(), NanoGetError> {
 }
 
 fn validate_target_component(value: &str, component: &str) -> Result<(), NanoGetError> {
+    if !value.is_ascii() {
+        return Err(NanoGetError::invalid_url(format!(
+            "invalid {component}: contains non-ASCII characters"
+        )));
+    }
+
     if value
         .chars()
         .any(|ch| ch.is_ascii_control() || ch.is_ascii_whitespace())
@@ -549,6 +574,16 @@ mod tests {
     }
 
     #[test]
+    fn resolve_treats_only_scheme_prefixed_locations_as_absolute() {
+        let base = Url::parse("http://example.com/base").unwrap();
+        let resolved = base.resolve("/foo://bar").unwrap();
+        assert_eq!(resolved.full_url(), "http://example.com/foo://bar");
+
+        let error = base.resolve("ftp://example.com").unwrap_err();
+        assert!(matches!(error, NanoGetError::UnsupportedScheme(_)));
+    }
+
+    #[test]
     fn rejects_unsupported_schemes() {
         let error = Url::parse("ftp://example.com").unwrap_err();
         assert!(matches!(error, NanoGetError::UnsupportedScheme(ref value) if value == "ftp"));
@@ -656,6 +691,20 @@ mod tests {
         ));
         assert!(matches!(
             Url::parse("http://example.com/path?x=\n1"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            Url::parse("http://example.com/caf\u{00e9}"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+        assert!(matches!(
+            Url::parse("http://example.com/path?q=\u{00e9}"),
+            Err(NanoGetError::InvalidUrl(_))
+        ));
+
+        let base = Url::parse("http://example.com/path").unwrap();
+        assert!(matches!(
+            base.resolve("/caf\u{00e9}"),
             Err(NanoGetError::InvalidUrl(_))
         ));
     }
